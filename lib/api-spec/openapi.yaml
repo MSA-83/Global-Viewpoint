@@ -1,22 +1,32 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Sentinel Global Situational Awareness Platform API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: threats
+    description: Threat intelligence operations
+  - name: incidents
+    description: Incident management
+  - name: gps
+    description: GPS jamming anomaly detection
+  - name: assets
+    description: Asset and unit tracking
+  - name: signals
+    description: SIGINT/OSINT signals intelligence
+  - name: dashboard
+    description: Dashboard summary and analytics
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +34,445 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /threats:
+    get:
+      operationId: listThreats
+      tags: [threats]
+      summary: List all active threats
+      parameters:
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [critical, high, medium, low]
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: region
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of threats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Threat"
+    post:
+      operationId: createThreat
+      tags: [threats]
+      summary: Create a new threat entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateThreatBody"
+      responses:
+        "201":
+          description: Created threat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Threat"
+
+  /threats/{id}:
+    get:
+      operationId: getThreat
+      tags: [threats]
+      summary: Get a specific threat
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Threat details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Threat"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateThreat
+      tags: [threats]
+      summary: Update a threat
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateThreatBody"
+      responses:
+        "200":
+          description: Updated threat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Threat"
+    delete:
+      operationId: deleteThreat
+      tags: [threats]
+      summary: Delete a threat
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /incidents:
+    get:
+      operationId: listIncidents
+      tags: [incidents]
+      summary: List all incidents
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, monitoring, resolved, escalated]
+        - name: type
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of incidents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Incident"
+    post:
+      operationId: createIncident
+      tags: [incidents]
+      summary: Create a new incident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIncidentBody"
+      responses:
+        "201":
+          description: Created incident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+
+  /incidents/{id}:
+    get:
+      operationId: getIncident
+      tags: [incidents]
+      summary: Get incident details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Incident details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+    patch:
+      operationId: updateIncident
+      tags: [incidents]
+      summary: Update an incident
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIncidentBody"
+      responses:
+        "200":
+          description: Updated incident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+
+  /gps-anomalies:
+    get:
+      operationId: listGpsAnomalies
+      tags: [gps]
+      summary: List GPS jamming anomalies
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [jamming, spoofing, interference, outage]
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [critical, high, medium, low]
+        - name: region
+          in: query
+          schema:
+            type: string
+        - name: active
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: List of GPS anomalies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GpsAnomaly"
+
+  /assets:
+    get:
+      operationId: listAssets
+      tags: [assets]
+      summary: List tracked assets
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [vessel, aircraft, vehicle, personnel, facility, satellite]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive, unknown, compromised]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: List of assets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Asset"
+    post:
+      operationId: createAsset
+      tags: [assets]
+      summary: Create/register an asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetBody"
+      responses:
+        "201":
+          description: Created asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+
+  /assets/{id}:
+    get:
+      operationId: getAsset
+      tags: [assets]
+      summary: Get asset details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Asset details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+    patch:
+      operationId: updateAsset
+      tags: [assets]
+      summary: Update asset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAssetBody"
+      responses:
+        "200":
+          description: Updated asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+
+  /signals:
+    get:
+      operationId: listSignals
+      tags: [signals]
+      summary: List SIGINT/OSINT signals
+      parameters:
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [satellite, social, radio, cyber, humint]
+        - name: confidence
+          in: query
+          schema:
+            type: string
+            enum: [confirmed, probable, possible, unconfirmed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of signals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Signal"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get global dashboard summary
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/threat-trend:
+    get:
+      operationId: getThreatTrend
+      tags: [dashboard]
+      summary: Get threat trend data for the last 24 hours
+      responses:
+        "200":
+          description: Threat trend data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ThreatTrendPoint"
+
+  /dashboard/regional-breakdown:
+    get:
+      operationId: getRegionalBreakdown
+      tags: [dashboard]
+      summary: Get threat counts by region
+      responses:
+        "200":
+          description: Regional breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RegionalBreakdown"
+
+  /dashboard/activity-feed:
+    get:
+      operationId: getActivityFeed
+      tags: [dashboard]
+      summary: Get recent activity feed
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Activity feed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityEvent"
+
+  /dashboard/gps-stats:
+    get:
+      operationId: getGpsStats
+      tags: [dashboard]
+      summary: Get GPS jamming statistics
+      responses:
+        "200":
+          description: GPS jamming statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GpsStats"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +480,487 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required: [error, message]
+
+    Threat:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        category:
+          type: string
+          enum: [military, cyber, political, natural, economic, terrorism]
+        status:
+          type: string
+          enum: [active, monitoring, resolved, escalated]
+        region:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        confidence:
+          type: number
+          description: 0-100 confidence score
+        source:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        detectedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, title, severity, category, status, region, latitude, longitude, confidence, detectedAt, updatedAt]
+
+    CreateThreatBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        category:
+          type: string
+          enum: [military, cyber, political, natural, economic, terrorism]
+        region:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        confidence:
+          type: number
+        source:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+      required: [title, severity, category, region, latitude, longitude]
+
+    UpdateThreatBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        status:
+          type: string
+          enum: [active, monitoring, resolved, escalated]
+        confidence:
+          type: number
+        tags:
+          type: array
+          items:
+            type: string
+
+    Incident:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          enum: [armed_conflict, cyber_attack, natural_disaster, civil_unrest, terrorism, gps_disruption, maritime, aviation]
+        status:
+          type: string
+          enum: [active, monitoring, resolved, escalated]
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        region:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        threatIds:
+          type: array
+          items:
+            type: integer
+        casualties:
+          type: integer
+          nullable: true
+        affectedArea:
+          type: number
+          nullable: true
+          description: Area in km²
+        reportedBy:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, title, type, status, severity, region, latitude, longitude, startedAt, updatedAt]
+
+    CreateIncidentBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          enum: [armed_conflict, cyber_attack, natural_disaster, civil_unrest, terrorism, gps_disruption, maritime, aviation]
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        region:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        reportedBy:
+          type: string
+      required: [title, type, severity, region, latitude, longitude]
+
+    UpdateIncidentBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, monitoring, resolved, escalated]
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        casualties:
+          type: integer
+        resolvedAt:
+          type: string
+          format: date-time
+
+    GpsAnomaly:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [jamming, spoofing, interference, outage]
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        region:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        radius:
+          type: number
+          description: Affected radius in km
+        affectedSystems:
+          type: array
+          items:
+            type: string
+        signalStrength:
+          type: number
+          description: Jamming signal strength in dB
+        frequency:
+          type: number
+          description: Affected frequency in MHz
+        source:
+          type: string
+        active:
+          type: boolean
+        detectedAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+      required: [id, type, severity, region, latitude, longitude, radius, active, detectedAt, lastSeenAt]
+
+    Asset:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        designation:
+          type: string
+        type:
+          type: string
+          enum: [vessel, aircraft, vehicle, personnel, facility, satellite]
+        status:
+          type: string
+          enum: [active, inactive, unknown, compromised]
+        affiliation:
+          type: string
+          enum: [friendly, neutral, hostile, unknown]
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        altitude:
+          type: number
+          nullable: true
+        speed:
+          type: number
+          nullable: true
+        heading:
+          type: number
+          nullable: true
+          description: Bearing in degrees 0-360
+        trackId:
+          type: string
+          nullable: true
+        lastPositionAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, type, status, affiliation, latitude, longitude, lastPositionAt, updatedAt]
+
+    CreateAssetBody:
+      type: object
+      properties:
+        name:
+          type: string
+        designation:
+          type: string
+        type:
+          type: string
+          enum: [vessel, aircraft, vehicle, personnel, facility, satellite]
+        affiliation:
+          type: string
+          enum: [friendly, neutral, hostile, unknown]
+        country:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+      required: [name, type, affiliation, latitude, longitude]
+
+    UpdateAssetBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [active, inactive, unknown, compromised]
+        latitude:
+          type: number
+        longitude:
+          type: number
+        altitude:
+          type: number
+        speed:
+          type: number
+        heading:
+          type: number
+
+    Signal:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        summary:
+          type: string
+        source:
+          type: string
+          enum: [satellite, social, radio, cyber, humint]
+        confidence:
+          type: string
+          enum: [confirmed, probable, possible, unconfirmed]
+        region:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        threatLevel:
+          type: string
+          enum: [critical, high, medium, low, none]
+        tags:
+          type: array
+          items:
+            type: string
+        rawData:
+          type: string
+          nullable: true
+        collectedAt:
+          type: string
+          format: date-time
+      required: [id, title, source, confidence, region, threatLevel, collectedAt]
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalThreats:
+          type: integer
+        criticalThreats:
+          type: integer
+        activeIncidents:
+          type: integer
+        gpsAnomalies:
+          type: integer
+        trackedAssets:
+          type: integer
+        activeSignals:
+          type: integer
+        threatDelta24h:
+          type: integer
+          description: Change in threat count vs 24h ago
+        systemStatus:
+          type: string
+          enum: [nominal, degraded, critical]
+        lastUpdated:
+          type: string
+          format: date-time
+      required: [totalThreats, criticalThreats, activeIncidents, gpsAnomalies, trackedAssets, activeSignals, threatDelta24h, systemStatus, lastUpdated]
+
+    ThreatTrendPoint:
+      type: object
+      properties:
+        hour:
+          type: string
+        critical:
+          type: integer
+        high:
+          type: integer
+        medium:
+          type: integer
+        low:
+          type: integer
+        total:
+          type: integer
+      required: [hour, critical, high, medium, low, total]
+
+    RegionalBreakdown:
+      type: object
+      properties:
+        region:
+          type: string
+        threatCount:
+          type: integer
+        incidentCount:
+          type: integer
+        gpsAnomalyCount:
+          type: integer
+        riskLevel:
+          type: string
+          enum: [critical, high, medium, low, minimal]
+      required: [region, threatCount, incidentCount, gpsAnomalyCount, riskLevel]
+
+    ActivityEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [threat_detected, incident_created, asset_updated, gps_anomaly, signal_intercepted, status_changed]
+        severity:
+          type: string
+          enum: [critical, high, medium, low, info]
+        title:
+          type: string
+        description:
+          type: string
+        region:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        entityId:
+          type: integer
+          nullable: true
+        entityType:
+          type: string
+          nullable: true
+      required: [id, type, severity, title, region, timestamp]
+
+    GpsStats:
+      type: object
+      properties:
+        activeJammingSites:
+          type: integer
+        activeSpoofingSites:
+          type: integer
+        affectedAircraftCount:
+          type: integer
+        affectedVesselCount:
+          type: integer
+        totalAffectedArea:
+          type: number
+          description: Total affected area in km²
+        hotspots:
+          type: array
+          items:
+            type: object
+            properties:
+              region:
+                type: string
+              count:
+                type: integer
+              severity:
+                type: string
+            required: [region, count, severity]
+        trend24h:
+          type: string
+          enum: [increasing, stable, decreasing]
+      required: [activeJammingSites, activeSpoofingSites, affectedAircraftCount, affectedVesselCount, totalAffectedArea, hotspots, trend24h]
