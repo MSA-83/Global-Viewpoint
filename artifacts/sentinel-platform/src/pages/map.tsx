@@ -1,263 +1,479 @@
 import { useListThreats, useListGpsAnomalies, useListAssets } from "@workspace/api-client-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { MapContainer, TileLayer, CircleMarker, Popup, Circle, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { SeverityBadge } from "@/components/badges";
-import { MapPin, Crosshair, Navigation } from "lucide-react";
+import { SeverityBadge, StatusBadge } from "@/components/badges";
+import { MapPin, Crosshair, Navigation, Radio, Shield, AlertTriangle, X } from "lucide-react";
 
-// World continent SVG paths (simplified Robinson projection)
-const CONTINENTS = [
-  {
-    name: "North America",
-    d: "M 140 80 L 200 70 L 240 90 L 250 130 L 230 170 L 200 180 L 185 200 L 175 190 L 165 200 L 155 185 L 140 180 L 130 160 L 120 140 L 125 110 Z",
-    fill: "rgba(30, 60, 40, 0.6)"
-  },
-  {
-    name: "South America",
-    d: "M 185 210 L 215 200 L 235 220 L 240 260 L 235 310 L 220 340 L 200 350 L 185 330 L 175 290 L 170 250 L 175 220 Z",
-    fill: "rgba(30, 60, 40, 0.6)"
-  },
-  {
-    name: "Europe",
-    d: "M 330 60 L 380 55 L 400 70 L 390 90 L 370 100 L 350 95 L 330 85 Z",
-    fill: "rgba(30, 60, 40, 0.6)"
-  },
-  {
-    name: "Africa",
-    d: "M 340 120 L 380 110 L 410 125 L 420 170 L 415 220 L 400 270 L 375 290 L 355 275 L 335 230 L 325 180 L 325 140 Z",
-    fill: "rgba(30, 60, 40, 0.6)"
-  },
-  {
-    name: "Asia",
-    d: "M 390 55 L 480 40 L 560 50 L 600 70 L 610 110 L 580 140 L 540 150 L 500 160 L 460 150 L 430 130 L 400 120 L 390 90 Z",
-    fill: "rgba(30, 60, 40, 0.6)"
-  },
-  {
-    name: "Australia",
-    d: "M 520 230 L 570 220 L 600 235 L 610 265 L 595 285 L 560 290 L 530 275 L 515 255 Z",
-    fill: "rgba(30, 60, 40, 0.6)"
-  },
-];
+// Fix Leaflet default icon paths broken by bundlers
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
 
-// Convert lat/lon to SVG coordinates (simple equirectangular)
-function latLonToSvg(lat: number, lon: number, w = 760, h = 420) {
-  const x = ((lon + 180) / 360) * w;
-  const y = ((90 - lat) / 180) * h;
-  return { x, y };
+// Force dark overlay on the map tiles
+const MAP_STYLE = `
+  .leaflet-container {
+    background: #050d1a;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+  .leaflet-popup-content-wrapper {
+    background: rgba(5, 13, 26, 0.97);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    border-radius: 0;
+    color: #e2e8f0;
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.1);
+  }
+  .leaflet-popup-tip {
+    background: rgba(5, 13, 26, 0.97);
+  }
+  .leaflet-popup-close-button {
+    color: rgba(34, 197, 94, 0.8) !important;
+    font-size: 18px !important;
+    top: 8px !important;
+    right: 8px !important;
+  }
+  .leaflet-popup-close-button:hover {
+    color: #22c55e !important;
+  }
+  .leaflet-control-zoom {
+    border: 1px solid rgba(34, 197, 94, 0.3) !important;
+    border-radius: 0 !important;
+  }
+  .leaflet-control-zoom a {
+    background: rgba(5, 13, 26, 0.9) !important;
+    color: #22c55e !important;
+    border-bottom: 1px solid rgba(34, 197, 94, 0.2) !important;
+  }
+  .leaflet-control-zoom a:hover {
+    background: rgba(34, 197, 94, 0.1) !important;
+  }
+  .leaflet-control-attribution {
+    background: rgba(5, 13, 26, 0.7) !important;
+    color: #475569 !important;
+    font-size: 9px;
+  }
+  .leaflet-control-attribution a { color: #475569 !important; }
+`;
+
+const SEV_COLOR: Record<string, string> = {
+  critical: "#ef4444",
+  high: "#f97316",
+  medium: "#eab308",
+  low: "#22c55e",
+  minimal: "#22c55e",
+};
+
+const AFFIL_COLOR: Record<string, string> = {
+  friendly: "#22c55e",
+  hostile: "#ef4444",
+  neutral: "#eab308",
+  unknown: "#94a3b8",
+};
+
+type SelectedMarker =
+  | { kind: "threat"; data: any }
+  | { kind: "gps"; data: any }
+  | { kind: "asset"; data: any };
+
+function MapStyleInjector() {
+  const map = useMap();
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = MAP_STYLE;
+    document.head.appendChild(style);
+    map.getContainer().style.background = "#050d1a";
+    return () => document.head.removeChild(style);
+  }, [map]);
+  return null;
 }
 
-type Marker = {
-  id: number;
-  lat: number;
-  lon: number;
-  severity: string;
-  label: string;
-  kind: "threat" | "gps" | "asset";
-  radius?: number;
-};
+function ThreatPopup({ t }: { t: any }) {
+  return (
+    <div className="font-mono text-xs min-w-[260px]">
+      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-green-900">
+        <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />
+        <span className="text-green-400 font-bold uppercase text-[10px]">THREAT INTELLIGENCE</span>
+      </div>
+      <div className="font-bold text-sm text-white mb-2 leading-tight">{t.title}</div>
+      <div className="space-y-1 mb-2">
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">ID</span>
+          <span className="text-green-400">T-{String(t.id).padStart(4, "0")}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">SEVERITY</span>
+          <span className={`font-bold uppercase ${t.severity === "critical" ? "text-red-400" : t.severity === "high" ? "text-orange-400" : t.severity === "medium" ? "text-yellow-400" : "text-green-400"}`}>
+            {t.severity}
+          </span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">STATUS</span>
+          <span className="text-white uppercase">{t.status}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">CATEGORY</span>
+          <span className="text-white uppercase">{t.category}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">REGION</span>
+          <span className="text-white">{t.region}</span>
+        </div>
+        {t.country && (
+          <div className="flex justify-between gap-4">
+            <span className="text-slate-400">COUNTRY</span>
+            <span className="text-white">{t.country}</span>
+          </div>
+        )}
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">SOURCE</span>
+          <span className="text-cyan-400">{t.source}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">CONFIDENCE</span>
+          <span className="text-green-400 font-bold">{t.confidence}%</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">COORDS</span>
+          <span className="text-slate-300">{t.latitude?.toFixed(4)}°, {t.longitude?.toFixed(4)}°</span>
+        </div>
+      </div>
+      {t.description && (
+        <div className="border-t border-green-900 pt-2">
+          <div className="text-slate-400 text-[10px] mb-1">ASSESSMENT</div>
+          <div className="text-slate-300 text-[11px] leading-relaxed">{t.description}</div>
+        </div>
+      )}
+      {t.tags && t.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-2">
+          {t.tags.map((tag: string) => (
+            <span key={tag} className="bg-green-950 text-green-400 px-1.5 py-0.5 text-[10px] border border-green-900">{tag}</span>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 pt-2 border-t border-green-900 text-[9px] text-slate-500">
+        DETECTED: {new Date(t.detectedAt).toISOString().replace("T", " ").slice(0, 19)} UTC
+      </div>
+    </div>
+  );
+}
+
+function GpsPopup({ g }: { g: any }) {
+  return (
+    <div className="font-mono text-xs min-w-[260px]">
+      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-green-900">
+        <Radio className="h-3 w-3 text-orange-400 shrink-0" />
+        <span className="text-orange-400 font-bold uppercase text-[10px]">GPS / GNSS ANOMALY</span>
+      </div>
+      <div className="font-bold text-sm text-white mb-2">{g.type.toUpperCase()} EVENT — {g.region}</div>
+      <div className="space-y-1 mb-2">
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">TYPE</span>
+          <span className="text-orange-400 font-bold uppercase">{g.type}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">SEVERITY</span>
+          <span className={`font-bold uppercase ${g.severity === "critical" ? "text-red-400" : g.severity === "high" ? "text-orange-400" : g.severity === "medium" ? "text-yellow-400" : "text-green-400"}`}>
+            {g.severity}
+          </span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">STATUS</span>
+          <span className={g.active ? "text-red-400 font-bold" : "text-slate-400"}>
+            {g.active ? "ACTIVE" : "RESOLVED"}
+          </span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">COUNTRY</span>
+          <span className="text-white">{g.country || "N/A"}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">RADIUS</span>
+          <span className="text-white">{g.radius?.toLocaleString() || "?"} km</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">FREQUENCY</span>
+          <span className="text-cyan-400">{g.frequency} MHz</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">SIGNAL STR</span>
+          <span className="text-white">{g.signalStrength} dBm</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">SOURCE</span>
+          <span className="text-cyan-400">{g.source}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">COORDS</span>
+          <span className="text-slate-300">{g.latitude?.toFixed(4)}°, {g.longitude?.toFixed(4)}°</span>
+        </div>
+      </div>
+      {g.affectedSystems?.length > 0 && (
+        <div className="border-t border-green-900 pt-2">
+          <div className="text-slate-400 text-[10px] mb-1">AFFECTED SYSTEMS</div>
+          <div className="flex flex-wrap gap-1">
+            {g.affectedSystems.map((sys: string) => (
+              <span key={sys} className="bg-orange-950 text-orange-400 px-1.5 py-0.5 text-[10px] border border-orange-900 uppercase">{sys}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="mt-2 pt-2 border-t border-green-900 text-[9px] text-slate-500">
+        DETECTED: {new Date(g.detectedAt).toISOString().replace("T", " ").slice(0, 19)} UTC
+      </div>
+    </div>
+  );
+}
+
+function AssetPopup({ a }: { a: any }) {
+  const color = AFFIL_COLOR[a.affiliation] ?? "#94a3b8";
+  return (
+    <div className="font-mono text-xs min-w-[260px]">
+      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-green-900">
+        <Shield className="h-3 w-3 shrink-0" style={{ color }} />
+        <span className="font-bold uppercase text-[10px]" style={{ color }}>TRACKED ASSET — {a.affiliation?.toUpperCase()}</span>
+      </div>
+      <div className="font-bold text-sm text-white mb-1">{a.name}</div>
+      {a.designation && <div className="text-green-400 text-[11px] mb-2">{a.designation}</div>}
+      <div className="space-y-1 mb-2">
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">TYPE</span>
+          <span className="text-white uppercase">{a.type}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">STATUS</span>
+          <span className="text-green-400 uppercase">{a.status}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">AFFILIATION</span>
+          <span className="font-bold uppercase" style={{ color }}>{a.affiliation}</span>
+        </div>
+        {a.country && (
+          <div className="flex justify-between gap-4">
+            <span className="text-slate-400">NATION</span>
+            <span className="text-white">{a.country}</span>
+          </div>
+        )}
+        {a.speed != null && (
+          <div className="flex justify-between gap-4">
+            <span className="text-slate-400">SPEED</span>
+            <span className="text-white">{a.type === "aircraft" || a.type === "satellite" ? `${a.speed} kt` : `${a.speed} kt`}</span>
+          </div>
+        )}
+        {a.heading != null && (
+          <div className="flex justify-between gap-4">
+            <span className="text-slate-400">HEADING</span>
+            <span className="text-white">{String(a.heading).padStart(3, "0")}°</span>
+          </div>
+        )}
+        {a.altitude != null && (
+          <div className="flex justify-between gap-4">
+            <span className="text-slate-400">ALTITUDE</span>
+            <span className="text-white">{a.altitude?.toLocaleString()} m MSL</span>
+          </div>
+        )}
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">POSITION</span>
+          <span className="text-slate-300">{a.latitude?.toFixed(4)}°, {a.longitude?.toFixed(4)}°</span>
+        </div>
+      </div>
+      <div className="mt-2 pt-2 border-t border-green-900 text-[9px] text-slate-500">
+        LAST FIX: {new Date(a.lastPositionAt).toISOString().replace("T", " ").slice(0, 19)} UTC
+      </div>
+    </div>
+  );
+}
 
 export default function MapPage() {
   const { data: threats } = useListThreats({ limit: 200 }, { query: { refetchInterval: 20000 } });
-  const { data: gpsAnomalies } = useListGpsAnomalies({ active: true }, { query: { refetchInterval: 20000 } });
+  const { data: gpsAnomalies } = useListGpsAnomalies({}, { query: { refetchInterval: 20000 } });
   const { data: assets } = useListAssets({ limit: 200 }, { query: { refetchInterval: 20000 } });
 
-  const [selected, setSelected] = useState<Marker | null>(null);
   const [layers, setLayers] = useState({ threats: true, gps: true, assets: true });
 
-  const markers = useMemo<Marker[]>(() => {
-    const all: Marker[] = [];
-    if (layers.threats && threats) {
-      threats.forEach(t => {
-        if (t.latitude != null && t.longitude != null) {
-          all.push({ id: t.id, lat: t.latitude, lon: t.longitude, severity: t.severity, label: t.title, kind: "threat" });
-        }
-      });
-    }
-    if (layers.gps && gpsAnomalies) {
-      gpsAnomalies.forEach(g => {
-        if (g.latitude != null && g.longitude != null) {
-          all.push({ id: g.id, lat: g.latitude, lon: g.longitude, severity: g.severity, label: `GPS: ${g.type.toUpperCase()} - ${g.region}`, kind: "gps", radius: g.radius });
-        }
-      });
-    }
-    if (layers.assets && assets) {
-      assets.forEach(a => {
-        if (a.latitude != null && a.longitude != null) {
-          all.push({ id: a.id, lat: a.latitude, lon: a.longitude, severity: a.affiliation === "hostile" ? "critical" : a.affiliation === "neutral" ? "medium" : "low", label: `${a.name} (${a.type})`, kind: "asset" });
-        }
-      });
-    }
-    return all;
-  }, [threats, gpsAnomalies, assets, layers]);
-
-  const sevColor: Record<string, string> = {
-    critical: "#ef4444",
-    high: "#f97316",
-    medium: "#eab308",
-    low: "#22c55e",
-    none: "#3b82f6",
-  };
-
-  const W = 760, H = 420;
+  const markerCounts = useMemo(() => ({
+    threats: threats?.filter(t => t.latitude != null && t.longitude != null).length ?? 0,
+    gps: gpsAnomalies?.filter(g => g.latitude != null && g.longitude != null).length ?? 0,
+    assets: assets?.filter(a => a.latitude != null && a.longitude != null).length ?? 0,
+  }), [threats, gpsAnomalies, assets]);
 
   return (
-    <div className="h-full flex flex-col space-y-4">
+    <div className="h-full flex flex-col space-y-3">
       <h1 className="text-2xl font-bold font-mono text-primary border-b border-primary/20 pb-2 shrink-0 flex items-center gap-2">
         <MapPin className="h-6 w-6" />
         GLOBAL SITUATIONAL MAP
+        <span className="text-sm font-normal text-muted-foreground ml-2">— LIVE SATELLITE VIEW</span>
       </h1>
 
-      <div className="flex gap-3 shrink-0 font-mono text-xs">
+      <div className="flex gap-2 shrink-0 font-mono text-xs flex-wrap">
         {[
-          { key: "threats", label: "THREATS", icon: "●", color: "text-destructive" },
-          { key: "gps", label: "GPS ANOMALIES", icon: "◎", color: "text-orange-400" },
-          { key: "assets", label: "ASSETS", icon: "▲", color: "text-primary" },
-        ].map(({ key, label, icon, color }) => (
+          { key: "threats", label: "THREATS", count: markerCounts.threats, dotColor: "#ef4444" },
+          { key: "gps", label: "GPS ANOMALIES", count: markerCounts.gps, dotColor: "#f97316" },
+          { key: "assets", label: "ASSETS", count: markerCounts.assets, dotColor: "#22c55e" },
+        ].map(({ key, label, count, dotColor }) => (
           <button
             key={key}
             onClick={() => setLayers(l => ({ ...l, [key]: !l[key as keyof typeof l] }))}
             className={`flex items-center gap-1.5 px-3 py-1.5 border transition-colors ${layers[key as keyof typeof layers] ? "border-primary/40 bg-primary/10 text-foreground" : "border-border/40 text-muted-foreground"}`}
           >
-            <span className={color}>{icon}</span>
+            <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: layers[key as keyof typeof layers] ? dotColor : "#475569" }} />
             {label}
+            <span className="ml-1 opacity-60">({count})</span>
           </button>
         ))}
-        <div className="ml-auto text-muted-foreground py-1.5">
-          {markers.length} ACTIVE MARKERS
+        <div className="ml-auto flex items-center gap-2 text-muted-foreground py-1.5">
+          <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+          ESRI WORLD IMAGERY · LIVE
         </div>
       </div>
 
-      <div className="flex gap-4 flex-1 min-h-0">
-        <Card className="flex-1 rounded-none border-primary/30 bg-background overflow-hidden relative">
-          <svg
-            viewBox={`0 0 ${W} ${H}`}
-            className="w-full h-full"
-            style={{ background: "linear-gradient(180deg, #050d1a 0%, #081528 100%)" }}
-          >
-            {/* Grid lines */}
-            {Array.from({ length: 19 }, (_, i) => (
-              <line key={`h${i}`} x1={0} y1={(H / 18) * i} x2={W} y2={(H / 18) * i} stroke="rgba(0,200,100,0.05)" strokeWidth={0.5} />
-            ))}
-            {Array.from({ length: 37 }, (_, i) => (
-              <line key={`v${i}`} x1={(W / 36) * i} y1={0} x2={(W / 36) * i} y2={H} stroke="rgba(0,200,100,0.05)" strokeWidth={0.5} />
-            ))}
-            {/* Equator */}
-            <line x1={0} y1={H / 2} x2={W} y2={H / 2} stroke="rgba(0,200,100,0.15)" strokeWidth={0.8} strokeDasharray="4,4" />
-            {/* Prime meridian */}
-            <line x1={W / 2} y1={0} x2={W / 2} y2={H} stroke="rgba(0,200,100,0.15)" strokeWidth={0.8} strokeDasharray="4,4" />
+      <div className="flex-1 min-h-0 relative border border-primary/20">
+        <MapContainer
+          center={[20, 15]}
+          zoom={2}
+          minZoom={2}
+          maxZoom={18}
+          style={{ height: "100%", width: "100%", background: "#050d1a" }}
+          scrollWheelZoom={true}
+          zoomControl={true}
+        >
+          <MapStyleInjector />
 
-            {/* Ocean background */}
-            <rect x={0} y={0} width={W} height={H} fill="transparent" />
+          {/* ESRI World Imagery satellite tiles */}
+          <TileLayer
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            attribution="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP"
+            maxZoom={18}
+          />
 
-            {/* Continents */}
-            {CONTINENTS.map(c => (
-              <path key={c.name} d={c.d} fill={c.fill} stroke="rgba(0,200,80,0.4)" strokeWidth={0.8} />
-            ))}
+          {/* Tactical overlay — semi-transparent dark grid feel */}
+          <TileLayer
+            url="https://stamen-tiles.a.ssl.fastly.net/toner-lines/{z}/{x}/{y}.png"
+            attribution=""
+            opacity={0.15}
+            maxZoom={18}
+          />
 
-            {/* GPS anomaly circles */}
-            {layers.gps && gpsAnomalies?.map(g => {
-              if (g.latitude == null || g.longitude == null) return null;
-              const { x, y } = latLonToSvg(g.latitude, g.longitude, W, H);
-              const r = Math.max(6, Math.min(30, (g.radius || 50) / 12));
-              return (
-                <g key={`gps-${g.id}`}>
-                  <circle cx={x} cy={y} r={r} fill="rgba(249,115,22,0.1)" stroke="rgba(249,115,22,0.6)" strokeWidth={1} strokeDasharray="3,2">
-                    <animate attributeName="r" values={`${r};${r * 1.4};${r}`} dur="3s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" values="0.8;0.3;0.8" dur="3s" repeatCount="indefinite" />
-                  </circle>
-                </g>
-              );
-            })}
+          {/* GPS Anomaly Zones — pulsing circles */}
+          {layers.gps && gpsAnomalies?.map(g => {
+            if (g.latitude == null || g.longitude == null) return null;
+            const color = SEV_COLOR[g.severity] ?? "#f97316";
+            const radiusKm = g.radius ?? 100;
+            return (
+              <Circle
+                key={`gps-${g.id}`}
+                center={[g.latitude, g.longitude]}
+                radius={radiusKm * 1000}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.08,
+                  weight: 1.5,
+                  dashArray: "6,4",
+                  opacity: 0.7,
+                }}
+              >
+                <Popup maxWidth={320} minWidth={260}>
+                  <GpsPopup g={g} />
+                </Popup>
+              </Circle>
+            );
+          })}
 
-            {/* Threat markers */}
-            {layers.threats && threats?.map(t => {
-              if (t.latitude == null || t.longitude == null) return null;
-              const { x, y } = latLonToSvg(t.latitude, t.longitude, W, H);
-              const color = sevColor[t.severity] || sevColor.none;
-              return (
-                <g key={`threat-${t.id}`} onClick={() => setSelected({ id: t.id, lat: t.latitude, lon: t.longitude, severity: t.severity, label: t.title, kind: "threat" })} style={{ cursor: "pointer" }}>
-                  {t.severity === "critical" && (
-                    <circle cx={x} cy={y} r={8} fill="none" stroke={color} strokeWidth={1} opacity={0.4}>
-                      <animate attributeName="r" values="8;14;8" dur="2s" repeatCount="indefinite" />
-                      <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite" />
-                    </circle>
-                  )}
-                  <circle cx={x} cy={y} r={4} fill={color} opacity={0.9} />
-                  <circle cx={x} cy={y} r={4} fill="none" stroke={color} strokeWidth={0.5} opacity={0.4} />
-                </g>
-              );
-            })}
+          {/* Threat markers */}
+          {layers.threats && threats?.map(t => {
+            if (t.latitude == null || t.longitude == null) return null;
+            const color = SEV_COLOR[t.severity] ?? "#94a3b8";
+            return (
+              <CircleMarker
+                key={`threat-${t.id}`}
+                center={[t.latitude, t.longitude]}
+                radius={t.severity === "critical" ? 9 : t.severity === "high" ? 7 : 5}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.9,
+                  weight: t.severity === "critical" ? 2 : 1.5,
+                }}
+              >
+                <Popup maxWidth={340} minWidth={270}>
+                  <ThreatPopup t={t} />
+                </Popup>
+              </CircleMarker>
+            );
+          })}
 
-            {/* Asset markers */}
-            {layers.assets && assets?.map(a => {
-              if (a.latitude == null || a.longitude == null) return null;
-              const { x, y } = latLonToSvg(a.latitude, a.longitude, W, H);
-              const color = a.affiliation === "hostile" ? "#ef4444" : a.affiliation === "neutral" ? "#eab308" : "#22c55e";
-              const size = 5;
-              return (
-                <g key={`asset-${a.id}`} onClick={() => setSelected({ id: a.id, lat: a.latitude, lon: a.longitude, severity: a.affiliation === "hostile" ? "critical" : "low", label: `${a.name}`, kind: "asset" })} style={{ cursor: "pointer" }}>
-                  <polygon
-                    points={`${x},${y - size} ${x - size * 0.8},${y + size * 0.6} ${x + size * 0.8},${y + size * 0.6}`}
-                    fill={color}
-                    opacity={0.85}
-                    stroke={color}
-                    strokeWidth={0.5}
-                  />
-                </g>
-              );
-            })}
-          </svg>
+          {/* Asset markers — larger circles with affiliation color */}
+          {layers.assets && assets?.map(a => {
+            if (a.latitude == null || a.longitude == null) return null;
+            const color = AFFIL_COLOR[a.affiliation] ?? "#94a3b8";
+            return (
+              <CircleMarker
+                key={`asset-${a.id}`}
+                center={[a.latitude, a.longitude]}
+                radius={a.type === "facility" ? 8 : 6}
+                pathOptions={{
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.7,
+                  weight: 2,
+                  dashArray: a.affiliation === "unknown" ? "3,2" : undefined,
+                }}
+              >
+                <Popup maxWidth={320} minWidth={260}>
+                  <AssetPopup a={a} />
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+        </MapContainer>
 
-          {selected && (
-            <div className="absolute bottom-4 left-4 bg-background/95 border border-primary/40 p-3 font-mono text-xs max-w-xs backdrop-blur-sm">
-              <div className="flex justify-between items-start mb-2">
-                <div className="text-primary font-bold uppercase">{selected.kind}</div>
-                <button onClick={() => setSelected(null)} className="text-muted-foreground hover:text-foreground ml-4">×</button>
+        {/* Legend overlay */}
+        <div className="absolute bottom-4 right-4 z-[1000] bg-background/95 border border-primary/30 backdrop-blur-sm font-mono text-xs p-3 space-y-2 min-w-[180px]">
+          <div className="text-primary font-bold flex items-center gap-1 mb-2">
+            <Crosshair className="h-3 w-3" /> LEGEND
+          </div>
+          <div className="space-y-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-bold">THREATS</div>
+            {[["critical", "#ef4444"], ["high", "#f97316"], ["medium", "#eab308"], ["low", "#22c55e"]].map(([sev, col]) => (
+              <div key={sev} className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full border border-black/20" style={{ background: col as string }} />
+                <span className="text-muted-foreground capitalize">{sev}</span>
               </div>
-              <div className="font-bold text-sm mb-1">{selected.label}</div>
-              <div className="flex items-center gap-2 mb-1">
-                <SeverityBadge severity={selected.severity} />
+            ))}
+          </div>
+          <div className="border-t border-border pt-2 space-y-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-bold">ASSETS</div>
+            {[["friendly", "#22c55e"], ["hostile", "#ef4444"], ["neutral", "#eab308"], ["unknown", "#94a3b8"]].map(([aff, col]) => (
+              <div key={aff} className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full border border-black/20" style={{ background: col as string }} />
+                <span className="text-muted-foreground capitalize">{aff}</span>
               </div>
-              <div className="text-muted-foreground">
-                {selected.lat.toFixed(4)}°N / {selected.lon.toFixed(4)}°E
-              </div>
+            ))}
+          </div>
+          <div className="border-t border-border pt-2 space-y-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-bold">GPS ANOMALY</div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full border-2 border-dashed border-orange-400" />
+              <span className="text-muted-foreground">Exclusion Zone</span>
             </div>
-          )}
-        </Card>
+          </div>
+        </div>
 
-        <div className="w-56 space-y-3 shrink-0 overflow-y-auto">
-          <Card className="rounded-none border-primary/20 bg-card/50">
-            <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-mono text-primary flex items-center gap-1"><Crosshair className="h-3 w-3" /> LEGEND</CardTitle>
-            </CardHeader>
-            <CardContent className="p-3 pt-1 space-y-2 font-mono text-xs">
-              {[
-                { color: "#ef4444", label: "CRITICAL THREAT" },
-                { color: "#f97316", label: "HIGH THREAT" },
-                { color: "#eab308", label: "MEDIUM THREAT" },
-                { color: "#22c55e", label: "LOW / FRIENDLY" },
-              ].map(({ color, label }) => (
-                <div key={label} className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
-                  <span className="text-muted-foreground">{label}</span>
-                </div>
-              ))}
-              <div className="pt-1 border-t border-border">
-                <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-orange-400 border-dashed" /><span className="text-muted-foreground">GPS ANOMALY ZONE</span></div>
-                <div className="flex items-center gap-2 mt-1"><div className="w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-transparent" style={{ borderBottomColor: "#22c55e" }} /><span className="text-muted-foreground">TRACKED ASSET</span></div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-none border-primary/20 bg-card/50">
-            <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-mono text-primary flex items-center gap-1"><Navigation className="h-3 w-3" /> SUMMARY</CardTitle>
-            </CardHeader>
-            <CardContent className="p-3 pt-1 font-mono text-xs space-y-2">
-              <div className="flex justify-between"><span className="text-muted-foreground">THREATS</span><span className="text-destructive font-bold">{threats?.length || 0}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">GPS SITES</span><span className="text-orange-400 font-bold">{gpsAnomalies?.length || 0}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">ASSETS</span><span className="text-primary font-bold">{assets?.length || 0}</span></div>
-            </CardContent>
-          </Card>
+        {/* Summary overlay */}
+        <div className="absolute top-4 right-4 z-[1000] bg-background/95 border border-primary/30 backdrop-blur-sm font-mono text-xs p-3">
+          <div className="text-primary font-bold flex items-center gap-1 mb-2">
+            <Navigation className="h-3 w-3" /> SUMMARY
+          </div>
+          <div className="space-y-1">
+            <div className="flex justify-between gap-6"><span className="text-muted-foreground">THREATS</span><span className="text-red-400 font-bold">{markerCounts.threats}</span></div>
+            <div className="flex justify-between gap-6"><span className="text-muted-foreground">GPS SITES</span><span className="text-orange-400 font-bold">{markerCounts.gps}</span></div>
+            <div className="flex justify-between gap-6"><span className="text-muted-foreground">ASSETS</span><span className="text-green-400 font-bold">{markerCounts.assets}</span></div>
+          </div>
         </div>
       </div>
     </div>
