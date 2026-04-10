@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startAisStream } from "./routes/ais-ws";
 
 const rawPort = process.env["PORT"];
 
