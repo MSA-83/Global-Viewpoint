@@ -4,3 +4,8 @@ export * from "./gps_anomalies";
 export * from "./assets";
 export * from "./signals";
 export * from "./activity_events";
+export * from "./alerts";
+export * from "./cases";
+export * from "./users";
+export * from "./workspaces";
+export * from "./knowledge_graph";
