@@ -94,3 +94,26 @@ export const getAuditLogs = () => apiFetch("/admin/audit");
 export const generateBriefing = (data: any) => apiFetch("/ai/briefing", { method: "POST", body: JSON.stringify(data) });
 export const aiQuery = (query: string) => apiFetch("/ai/query", { method: "POST", body: JSON.stringify({ query }) });
 export const aiSummarize = (type: string, id: number) => apiFetch(`/ai/summarize/${type}/${id}`, { method: "POST" });
+
+// Threats
+export const listThreats = (params?: Record<string, any>) => {
+  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+  return apiFetch(`/threats${qs}`);
+};
+export const createThreat = (data: any) => apiFetch("/threats", { method: "POST", body: JSON.stringify(data) });
+export const updateThreat = (id: number, data: any) => apiFetch(`/threats/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+export const deleteThreat = (id: number) => apiFetch(`/threats/${id}`, { method: "DELETE" });
+
+// Incidents
+export const listIncidents = () => apiFetch("/incidents");
+export const updateIncident = (id: number, data: any) => apiFetch(`/incidents/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+
+// Assets
+export const listAssets = () => apiFetch("/assets");
+export const updateAsset = (id: number, data: any) => apiFetch(`/assets/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+
+// Signals
+export const listSignals = () => apiFetch("/signals");
+
+// GPS Anomalies
+export const listGpsAnomalies = () => apiFetch("/gps-anomalies");

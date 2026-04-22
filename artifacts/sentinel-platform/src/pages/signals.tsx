@@ -1,153 +1,96 @@
-import { useListSignals } from "@workspace/api-client-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { SeverityBadge } from "@/components/badges";
-import { Radio, Satellite, Globe, Rss, Monitor, User } from "lucide-react";
 import { useState } from "react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useQuery } from "@tanstack/react-query";
+import { listSignals } from "@/lib/api";
+import { Radio, Search, X } from "lucide-react";
 
-const sourceIcons: Record<string, React.ElementType> = {
-  satellite: Satellite,
-  social: Globe,
-  radio: Rss,
-  cyber: Monitor,
-  humint: User,
+const TYPE_COLOR: Record<string, string> = {
+  comint: "text-blue-400 border-blue-900/40",
+  elint: "text-purple-400 border-purple-900/40",
+  fisint: "text-orange-400 border-orange-900/40",
+  radar: "text-cyan-400 border-cyan-900/40",
 };
 
-const sourceColors: Record<string, string> = {
-  satellite: "bg-blue-500/20 text-blue-400 border-blue-500/40",
-  social: "bg-purple-500/20 text-purple-400 border-purple-500/40",
-  radio: "bg-green-500/20 text-green-400 border-green-500/40",
-  cyber: "bg-orange-500/20 text-orange-400 border-orange-500/40",
-  humint: "bg-yellow-500/20 text-yellow-400 border-yellow-500/40",
-};
+export default function SignalsPage() {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<any>(null);
 
-const confidenceColors: Record<string, string> = {
-  confirmed: "bg-primary/20 text-primary border-primary/50",
-  probable: "bg-yellow-500/20 text-yellow-400 border-yellow-500/50",
-  possible: "bg-muted/20 text-muted-foreground border-muted/50",
-  unconfirmed: "bg-destructive/10 text-destructive/60 border-destructive/20",
-};
+  const { data: signals, isLoading } = useQuery({
+    queryKey: ["signals"],
+    queryFn: listSignals,
+    refetchInterval: 30000,
+  });
 
-export default function Signals() {
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
-  const [confidenceFilter, setConfidenceFilter] = useState<string>("all");
-
-  const { data: signals, isLoading } = useListSignals({
-    source: sourceFilter !== "all" ? (sourceFilter as any) : undefined,
-    confidence: confidenceFilter !== "all" ? (confidenceFilter as any) : undefined,
-  }, { query: { refetchInterval: 20000 } });
+  const filtered = (signals ?? []).filter((s: any) =>
+    !search || s.source?.toLowerCase().includes(search.toLowerCase()) || s.frequency?.toString().includes(search)
+  );
 
   return (
-    <div className="space-y-6 h-full flex flex-col">
-      <h1 className="text-2xl font-bold font-mono text-primary border-b border-primary/20 pb-2 shrink-0 flex items-center gap-2">
-        <Radio className="h-6 w-6" />
-        SIGNALS INTELLIGENCE (SIGINT/OSINT)
-      </h1>
-
-      <div className="flex gap-4 items-center shrink-0">
-        <Select value={sourceFilter} onValueChange={setSourceFilter}>
-          <SelectTrigger className="w-[180px] rounded-none border-primary/20 bg-background/50 font-mono">
-            <SelectValue placeholder="Filter Source" />
-          </SelectTrigger>
-          <SelectContent className="rounded-none font-mono">
-            <SelectItem value="all">ALL SOURCES</SelectItem>
-            <SelectItem value="satellite">SATELLITE</SelectItem>
-            <SelectItem value="social">SOCIAL/OSINT</SelectItem>
-            <SelectItem value="radio">RADIO INTERCEPT</SelectItem>
-            <SelectItem value="cyber">CYBER</SelectItem>
-            <SelectItem value="humint">HUMINT</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={confidenceFilter} onValueChange={setConfidenceFilter}>
-          <SelectTrigger className="w-[180px] rounded-none border-primary/20 bg-background/50 font-mono">
-            <SelectValue placeholder="Confidence" />
-          </SelectTrigger>
-          <SelectContent className="rounded-none font-mono">
-            <SelectItem value="all">ALL CONFIDENCE</SelectItem>
-            <SelectItem value="confirmed">CONFIRMED</SelectItem>
-            <SelectItem value="probable">PROBABLE</SelectItem>
-            <SelectItem value="possible">POSSIBLE</SelectItem>
-            <SelectItem value="unconfirmed">UNCONFIRMED</SelectItem>
-          </SelectContent>
-        </Select>
-        <div className="ml-auto font-mono text-xs text-muted-foreground">
-          {signals?.length || 0} INTERCEPTS
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Radio className="h-5 w-5 text-purple-400" />
+          <h1 className="text-lg font-bold text-purple-400 tracking-widest">SIGINT INTERCEPTS</h1>
         </div>
+        <div className="text-[10px] text-slate-500">{filtered.length} INTERCEPTS</div>
       </div>
 
-      <Card className="flex-1 rounded-none border-primary/20 bg-card/50 overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-auto">
-          <Table>
-            <TableHeader className="bg-background/80 sticky top-0 z-10 backdrop-blur-sm">
-              <TableRow className="border-primary/20 hover:bg-transparent">
-                <TableHead className="font-mono text-primary font-bold">ID</TableHead>
-                <TableHead className="font-mono text-primary font-bold">SOURCE</TableHead>
-                <TableHead className="font-mono text-primary font-bold">CONFIDENCE</TableHead>
-                <TableHead className="font-mono text-primary font-bold">THREAT</TableHead>
-                <TableHead className="font-mono text-primary font-bold">TITLE</TableHead>
-                <TableHead className="font-mono text-primary font-bold">REGION</TableHead>
-                <TableHead className="font-mono text-primary font-bold">TAGS</TableHead>
-                <TableHead className="font-mono text-primary font-bold">COLLECTED</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody className="font-mono text-sm">
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground animate-pulse">
-                    DECRYPTING INTERCEPTS...
-                  </TableCell>
-                </TableRow>
-              ) : signals?.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                    NO SIGNALS IN QUEUE
-                  </TableCell>
-                </TableRow>
-              ) : (
-                signals?.map((sig) => {
-                  const SrcIcon = sourceIcons[sig.source] || Radio;
-                  return (
-                    <TableRow key={sig.id} className="border-primary/10 hover:bg-primary/5">
-                      <TableCell className="text-muted-foreground">S-{sig.id.toString().padStart(4, "0")}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={`${sourceColors[sig.source] || ""} rounded-none font-mono uppercase flex items-center gap-1 w-fit`}>
-                          <SrcIcon className="h-3 w-3" />
-                          {sig.source}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={`${confidenceColors[sig.confidence] || ""} rounded-none font-mono uppercase`}>
-                          {sig.confidence}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {sig.threatLevel !== "none" ? <SeverityBadge severity={sig.threatLevel} /> : (
-                          <span className="text-muted-foreground text-xs">NONE</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="max-w-xs">
-                        <div className="font-bold">{sig.title}</div>
-                        {sig.summary && <div className="text-xs text-muted-foreground mt-0.5 truncate">{sig.summary}</div>}
-                      </TableCell>
-                      <TableCell>{sig.region}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-1 flex-wrap">
-                          {(sig.tags || []).slice(0, 2).map((tag, i) => (
-                            <span key={i} className="text-[10px] bg-primary/10 text-primary px-1 py-0.5 border border-primary/20">{tag}</span>
-                          ))}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">{new Date(sig.collectedAt).toLocaleString()}</TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
+      <div className="relative max-w-md">
+        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-600" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search signals..."
+          className="w-full bg-[#070e1c] border border-green-900/30 text-slate-300 text-[11px] pl-7 pr-2 py-1.5 focus:outline-none focus:border-green-700" />
+      </div>
+
+      {isLoading ? (
+        <div className="text-[10px] text-slate-600 py-8 text-center">SCANNING...</div>
+      ) : (
+        <div className="border border-green-900/30 bg-[#070e1c]">
+          <div className="grid grid-cols-12 gap-2 text-[9px] text-slate-500 px-3 py-2 border-b border-green-900/30 bg-[#050c18]">
+            <div className="col-span-2">TYPE</div>
+            <div className="col-span-2">FREQ (MHz)</div>
+            <div className="col-span-3">SOURCE</div>
+            <div className="col-span-2">REGION</div>
+            <div className="col-span-2">CONFIDENCE</div>
+            <div className="col-span-1">SIG</div>
+          </div>
+          <div className="max-h-[calc(100vh-220px)] overflow-y-auto">
+            {filtered.map((s: any) => (
+              <div key={s.id} onClick={() => setSelected(s)}
+                className="grid grid-cols-12 gap-2 text-[10px] px-3 py-2 border-b border-green-900/10 hover:bg-green-950/10 cursor-pointer">
+                <div className="col-span-2"><span className={`px-1.5 py-0.5 border ${TYPE_COLOR[s.type] ?? "text-slate-400 border-slate-700"}`}>{s.type?.toUpperCase()}</span></div>
+                <div className="col-span-2 text-cyan-400 font-mono">{s.frequency?.toFixed(2) || "-"}</div>
+                <div className="col-span-3 text-slate-300 truncate">{s.source || "UNKNOWN"}</div>
+                <div className="col-span-2 text-slate-500">{s.region || "-"}</div>
+                <div className="col-span-2 text-slate-400 font-mono">{s.confidence ? `${Math.round(s.confidence * 100)}%` : "-"}</div>
+                <div className="col-span-1 text-yellow-400 font-mono">{s.signalStrength?.toFixed(0) || "-"}</div>
+              </div>
+            ))}
+            {filtered.length === 0 && <div className="text-[10px] text-slate-600 py-8 text-center">NO INTERCEPTS</div>}
+          </div>
         </div>
-      </Card>
+      )}
+
+      {selected && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setSelected(null)}>
+          <div onClick={e => e.stopPropagation()} className="bg-[#070e1c] border border-purple-900/40 max-w-2xl w-full p-5">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <div className={`inline-block text-[9px] px-1.5 py-0.5 border mb-2 ${TYPE_COLOR[selected.type] ?? ""}`}>{selected.type?.toUpperCase()}</div>
+                <div className="text-sm font-bold text-slate-200">{selected.source || "UNKNOWN EMITTER"}</div>
+              </div>
+              <button onClick={() => setSelected(null)}><X className="h-4 w-4 text-slate-500" /></button>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-[10px]">
+              <div><div className="text-slate-600 mb-0.5">FREQUENCY</div><div className="text-cyan-400 font-mono">{selected.frequency?.toFixed(3)} MHz</div></div>
+              <div><div className="text-slate-600 mb-0.5">SIGNAL</div><div className="text-yellow-400 font-mono">{selected.signalStrength?.toFixed(1)} dBm</div></div>
+              <div><div className="text-slate-600 mb-0.5">CONFIDENCE</div><div className="text-slate-300 font-mono">{Math.round((selected.confidence ?? 0) * 100)}%</div></div>
+              <div><div className="text-slate-600 mb-0.5">REGION</div><div className="text-slate-300">{selected.region}</div></div>
+              <div><div className="text-slate-600 mb-0.5">LATITUDE</div><div className="text-cyan-400 font-mono">{selected.lat?.toFixed(4)}</div></div>
+              <div><div className="text-slate-600 mb-0.5">LONGITUDE</div><div className="text-cyan-400 font-mono">{selected.lng?.toFixed(4)}</div></div>
+            </div>
+            {selected.description && <div className="text-[11px] text-slate-400 mt-3 pt-3 border-t border-green-900/30">{selected.description}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

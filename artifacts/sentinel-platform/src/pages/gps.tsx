@@ -1,180 +1,119 @@
-import { useListGpsAnomalies, useGetGpsStats } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { SeverityBadge } from "@/components/badges";
-import { Crosshair, Wifi, WifiOff, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { useState } from "react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useQuery } from "@tanstack/react-query";
+import { listGpsAnomalies } from "@/lib/api";
+import { Satellite, Search, X, Activity } from "lucide-react";
 
-export default function Gps() {
-  const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [severityFilter, setSeverityFilter] = useState<string>("all");
+const TYPE_COLOR: Record<string, string> = {
+  spoofing: "text-red-400 border-red-900/40 bg-red-950/30",
+  jamming: "text-orange-400 border-orange-900/40 bg-orange-950/30",
+  interference: "text-yellow-400 border-yellow-900/40 bg-yellow-950/30",
+  drift: "text-blue-400 border-blue-900/40 bg-blue-950/30",
+};
 
-  const { data: anomalies, isLoading } = useListGpsAnomalies({
-    type: typeFilter !== "all" ? (typeFilter as any) : undefined,
-    severity: severityFilter !== "all" ? (severityFilter as any) : undefined,
-  }, { query: { refetchInterval: 15000 } });
+export default function GpsPage() {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<any>(null);
 
-  const { data: stats } = useGetGpsStats({ query: { refetchInterval: 15000 } });
+  const { data: anomalies, isLoading } = useQuery({
+    queryKey: ["gps"],
+    queryFn: listGpsAnomalies,
+    refetchInterval: 30000,
+  });
 
-  const typeColor: Record<string, string> = {
-    jamming: "bg-destructive/20 text-destructive border-destructive/50",
-    spoofing: "bg-orange-500/20 text-orange-400 border-orange-500/50",
-    interference: "bg-yellow-500/20 text-yellow-400 border-yellow-500/50",
-    outage: "bg-muted/20 text-muted-foreground border-muted/50",
+  const filtered = (anomalies ?? []).filter((a: any) =>
+    !search || a.region?.toLowerCase().includes(search.toLowerCase()) || a.type?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const stats = {
+    total: filtered.length,
+    spoofing: filtered.filter((a: any) => a.type === "spoofing").length,
+    jamming: filtered.filter((a: any) => a.type === "jamming").length,
+    interference: filtered.filter((a: any) => a.type === "interference").length,
   };
 
-  const TrendIcon = stats?.trend24h === "increasing" ? TrendingUp : stats?.trend24h === "decreasing" ? TrendingDown : Minus;
-
   return (
-    <div className="space-y-6 h-full flex flex-col">
-      <h1 className="text-2xl font-bold font-mono text-primary border-b border-primary/20 pb-2 shrink-0 flex items-center gap-2">
-        <Crosshair className="h-6 w-6" />
-        GPS JAMMING & SPOOFING ANOMALIES
-      </h1>
-
-      {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 shrink-0">
-          <Card className="rounded-none bg-destructive/10 border-destructive/30">
-            <CardContent className="p-4">
-              <div className="text-xs font-mono text-muted-foreground mb-1">ACTIVE JAMMING SITES</div>
-              <div className="text-3xl font-bold font-mono text-destructive">{stats.activeJammingSites}</div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-none bg-orange-500/10 border-orange-500/30">
-            <CardContent className="p-4">
-              <div className="text-xs font-mono text-muted-foreground mb-1">ACTIVE SPOOFING SITES</div>
-              <div className="text-3xl font-bold font-mono text-orange-400">{stats.activeSpoofingSites}</div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-none bg-primary/10 border-primary/30">
-            <CardContent className="p-4">
-              <div className="text-xs font-mono text-muted-foreground mb-1">AFFECTED AIRCRAFT</div>
-              <div className="text-3xl font-bold font-mono text-primary">{stats.affectedAircraftCount}</div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-none bg-card border-border">
-            <CardContent className="p-4">
-              <div className="text-xs font-mono text-muted-foreground mb-1">24H TREND</div>
-              <div className="flex items-center gap-2">
-                <TrendIcon className={`h-6 w-6 ${stats.trend24h === "increasing" ? "text-destructive" : stats.trend24h === "decreasing" ? "text-primary" : "text-muted-foreground"}`} />
-                <span className="font-mono font-bold uppercase">{stats.trend24h}</span>
-              </div>
-            </CardContent>
-          </Card>
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Satellite className="h-5 w-5 text-yellow-400" />
+          <h1 className="text-lg font-bold text-yellow-400 tracking-widest">GPS ANOMALY MONITOR</h1>
         </div>
-      )}
-
-      {stats && stats.hotspots.length > 0 && (
-        <Card className="rounded-none border-primary/20 bg-card/50 shrink-0">
-          <CardHeader className="py-3 px-4">
-            <CardTitle className="text-xs font-mono text-primary">JAMMING HOTSPOTS</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-3">
-            <div className="flex flex-wrap gap-3">
-              {stats.hotspots.map((hs, i) => (
-                <div key={i} className="flex items-center gap-2 bg-background/80 border border-border px-3 py-1.5 font-mono text-xs">
-                  <SeverityBadge severity={hs.severity} />
-                  <span>{hs.region}</span>
-                  <span className="text-muted-foreground">— {hs.count} sites</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="flex gap-4 items-center shrink-0">
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-[180px] rounded-none border-primary/20 bg-background/50 font-mono">
-            <SelectValue placeholder="Filter Type" />
-          </SelectTrigger>
-          <SelectContent className="rounded-none font-mono">
-            <SelectItem value="all">ALL TYPES</SelectItem>
-            <SelectItem value="jamming">JAMMING</SelectItem>
-            <SelectItem value="spoofing">SPOOFING</SelectItem>
-            <SelectItem value="interference">INTERFERENCE</SelectItem>
-            <SelectItem value="outage">OUTAGE</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={severityFilter} onValueChange={setSeverityFilter}>
-          <SelectTrigger className="w-[180px] rounded-none border-primary/20 bg-background/50 font-mono">
-            <SelectValue placeholder="Filter Severity" />
-          </SelectTrigger>
-          <SelectContent className="rounded-none font-mono">
-            <SelectItem value="all">ALL SEVERITIES</SelectItem>
-            <SelectItem value="critical">CRITICAL</SelectItem>
-            <SelectItem value="high">HIGH</SelectItem>
-            <SelectItem value="medium">MEDIUM</SelectItem>
-            <SelectItem value="low">LOW</SelectItem>
-          </SelectContent>
-        </Select>
-        <div className="ml-auto font-mono text-xs text-muted-foreground">
-          {anomalies?.length || 0} RECORDS
+        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+          <Activity className="h-3 w-3 text-green-400 animate-pulse" /> LIVE
         </div>
       </div>
 
-      <Card className="flex-1 rounded-none border-primary/20 bg-card/50 overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-auto">
-          <Table>
-            <TableHeader className="bg-background/80 sticky top-0 z-10 backdrop-blur-sm">
-              <TableRow className="border-primary/20 hover:bg-transparent">
-                <TableHead className="font-mono text-primary font-bold">ID</TableHead>
-                <TableHead className="font-mono text-primary font-bold">TYPE</TableHead>
-                <TableHead className="font-mono text-primary font-bold">SEVERITY</TableHead>
-                <TableHead className="font-mono text-primary font-bold">STATUS</TableHead>
-                <TableHead className="font-mono text-primary font-bold">REGION</TableHead>
-                <TableHead className="font-mono text-primary font-bold">RADIUS (KM)</TableHead>
-                <TableHead className="font-mono text-primary font-bold">SIGNAL (dB)</TableHead>
-                <TableHead className="font-mono text-primary font-bold">FREQ (MHz)</TableHead>
-                <TableHead className="font-mono text-primary font-bold">DETECTED</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody className="font-mono text-sm">
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground animate-pulse">
-                    SCANNING GNSS FREQUENCIES...
-                  </TableCell>
-                </TableRow>
-              ) : anomalies?.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                    NO ANOMALIES DETECTED
-                  </TableCell>
-                </TableRow>
-              ) : (
-                anomalies?.map((a) => (
-                  <TableRow key={a.id} className="border-primary/10 hover:bg-primary/5">
-                    <TableCell className="text-muted-foreground">G-{a.id.toString().padStart(4, "0")}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={`${typeColor[a.type] || ""} rounded-none font-mono uppercase`}>
-                        {a.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell><SeverityBadge severity={a.severity} /></TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        {a.active ? (
-                          <><Wifi className="h-3 w-3 text-destructive animate-pulse" /><span className="text-destructive">ACTIVE</span></>
-                        ) : (
-                          <><WifiOff className="h-3 w-3 text-muted-foreground" /><span className="text-muted-foreground">INACTIVE</span></>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>{a.region}</TableCell>
-                    <TableCell>{a.radius?.toFixed(0)}</TableCell>
-                    <TableCell className="text-orange-400">{a.signalStrength != null ? `${a.signalStrength.toFixed(1)}` : "—"}</TableCell>
-                    <TableCell className="text-primary">{a.frequency != null ? `${a.frequency.toFixed(1)}` : "—"}</TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{new Date(a.detectedAt).toLocaleString()}</TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          { label: "TOTAL EVENTS", val: stats.total, color: "text-slate-300" },
+          { label: "SPOOFING", val: stats.spoofing, color: "text-red-400" },
+          { label: "JAMMING", val: stats.jamming, color: "text-orange-400" },
+          { label: "INTERFERENCE", val: stats.interference, color: "text-yellow-400" },
+        ].map(s => (
+          <div key={s.label} className="border border-green-900/30 bg-[#070e1c] p-3">
+            <div className="text-[9px] text-slate-500">{s.label}</div>
+            <div className={`text-2xl font-bold font-mono ${s.color}`}>{s.val}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="relative max-w-md">
+        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-600" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search anomalies..."
+          className="w-full bg-[#070e1c] border border-green-900/30 text-slate-300 text-[11px] pl-7 pr-2 py-1.5 focus:outline-none focus:border-green-700" />
+      </div>
+
+      {isLoading ? (
+        <div className="text-[10px] text-slate-600 py-8 text-center">SCANNING...</div>
+      ) : (
+        <div className="border border-green-900/30 bg-[#070e1c]">
+          <div className="grid grid-cols-12 gap-2 text-[9px] text-slate-500 px-3 py-2 border-b border-green-900/30 bg-[#050c18]">
+            <div className="col-span-2">TYPE</div>
+            <div className="col-span-3">REGION</div>
+            <div className="col-span-2">POSITION</div>
+            <div className="col-span-2">RADIUS (km)</div>
+            <div className="col-span-2">CONFIDENCE</div>
+            <div className="col-span-1">DUR</div>
+          </div>
+          <div className="max-h-[calc(100vh-320px)] overflow-y-auto">
+            {filtered.map((a: any) => (
+              <div key={a.id} onClick={() => setSelected(a)}
+                className="grid grid-cols-12 gap-2 text-[10px] px-3 py-2 border-b border-green-900/10 hover:bg-green-950/10 cursor-pointer">
+                <div className="col-span-2"><span className={`px-1.5 py-0.5 border ${TYPE_COLOR[a.type] ?? ""}`}>{a.type?.toUpperCase()}</span></div>
+                <div className="col-span-3 text-slate-300 truncate">{a.region || "-"}</div>
+                <div className="col-span-2 text-cyan-400 font-mono text-[9px]">{a.lat?.toFixed(2)}, {a.lng?.toFixed(2)}</div>
+                <div className="col-span-2 text-yellow-400 font-mono">{a.radius?.toFixed(0) || "-"}</div>
+                <div className="col-span-2 text-slate-400 font-mono">{Math.round((a.confidence ?? 0) * 100)}%</div>
+                <div className="col-span-1 text-slate-500 font-mono">{a.duration ? `${Math.round(a.duration / 60)}m` : "-"}</div>
+              </div>
+            ))}
+            {filtered.length === 0 && <div className="text-[10px] text-slate-600 py-8 text-center">NO ANOMALIES DETECTED</div>}
+          </div>
         </div>
-      </Card>
+      )}
+
+      {selected && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setSelected(null)}>
+          <div onClick={e => e.stopPropagation()} className="bg-[#070e1c] border border-yellow-900/40 max-w-2xl w-full p-5">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <div className={`inline-block text-[9px] px-1.5 py-0.5 border mb-2 ${TYPE_COLOR[selected.type] ?? ""}`}>{selected.type?.toUpperCase()}</div>
+                <div className="text-sm font-bold text-slate-200">{selected.region || "UNKNOWN REGION"}</div>
+              </div>
+              <button onClick={() => setSelected(null)}><X className="h-4 w-4 text-slate-500" /></button>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-[10px]">
+              <div><div className="text-slate-600 mb-0.5">LATITUDE</div><div className="text-cyan-400 font-mono">{selected.lat?.toFixed(4)}</div></div>
+              <div><div className="text-slate-600 mb-0.5">LONGITUDE</div><div className="text-cyan-400 font-mono">{selected.lng?.toFixed(4)}</div></div>
+              <div><div className="text-slate-600 mb-0.5">RADIUS</div><div className="text-yellow-400 font-mono">{selected.radius?.toFixed(0)} km</div></div>
+              <div><div className="text-slate-600 mb-0.5">CONFIDENCE</div><div className="text-slate-300 font-mono">{Math.round((selected.confidence ?? 0) * 100)}%</div></div>
+              <div><div className="text-slate-600 mb-0.5">SEVERITY</div><div className="text-orange-400 uppercase">{selected.severity || "MEDIUM"}</div></div>
+              <div><div className="text-slate-600 mb-0.5">DURATION</div><div className="text-slate-300 font-mono">{selected.duration ? `${Math.round(selected.duration / 60)} min` : "-"}</div></div>
+            </div>
+            {selected.description && <div className="text-[11px] text-slate-400 mt-3 pt-3 border-t border-green-900/30">{selected.description}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

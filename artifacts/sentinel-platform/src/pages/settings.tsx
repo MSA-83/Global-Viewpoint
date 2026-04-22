@@ -1,149 +1,145 @@
-import { useHealthCheck } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Settings, Server, Database, Shield, Radio, Wifi, WifiOff, CheckCircle, XCircle } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-
-const DATA_SOURCES = [
-  { name: "NASA EONET", description: "Earth Observatory Natural Events", status: "connected", type: "Natural Hazards" },
-  { name: "OpenStreetMap", description: "Geospatial reference data", status: "connected", type: "Geospatial" },
-  { name: "AIS Stream", description: "Maritime vessel tracking", status: "degraded", type: "Maritime" },
-  { name: "AVWX API", description: "Aviation weather / SIGMETs", status: "connected", type: "Aviation" },
-  { name: "GNSS Monitor", description: "GPS anomaly detection feed", status: "connected", type: "Navigation" },
-  { name: "Shodan", description: "Cyber intelligence / exposed hosts", status: "offline", type: "Cyber" },
-  { name: "Space-Track", description: "Orbital / satellite TLE data", status: "degraded", type: "Orbital" },
-  { name: "OSINT Aggregator", description: "Open-source intelligence feed", status: "connected", type: "OSINT" },
-];
-
-const STATUS_COLORS: Record<string, string> = {
-  connected: "bg-primary/20 text-primary border-primary/50",
-  degraded: "bg-yellow-500/20 text-yellow-400 border-yellow-500/50",
-  offline: "bg-destructive/20 text-destructive border-destructive/50",
-};
+import { useState } from "react";
+import { Settings as SettingsIcon, User, Bell, Lock, Database, Network, Save } from "lucide-react";
+import { useAuth } from "@/contexts/auth";
+import { useToast } from "@/hooks/use-toast";
 
 export default function SettingsPage() {
-  const { data: health, isLoading } = useHealthCheck({ query: { refetchInterval: 30000 } });
+  const { user, logout } = useAuth();
+  const { toast } = useToast();
+  const [tab, setTab] = useState("profile");
+  const [prefs, setPrefs] = useState({
+    notifyAlerts: true,
+    notifyCritical: true,
+    notifyEmail: false,
+    autoRefresh: true,
+    refreshInterval: 15,
+    mapStyle: "tactical",
+    language: "en",
+    timezone: "UTC",
+  });
 
-  const systemOnline = health?.status === "ok";
+  const TABS = [
+    { id: "profile", icon: User, label: "PROFILE" },
+    { id: "notifications", icon: Bell, label: "NOTIFICATIONS" },
+    { id: "security", icon: Lock, label: "SECURITY" },
+    { id: "data", icon: Database, label: "DATA & SYNC" },
+    { id: "network", icon: Network, label: "NETWORK" },
+  ];
+
+  const save = () => {
+    localStorage.setItem("sentinel_prefs", JSON.stringify(prefs));
+    toast({ title: "Preferences saved" });
+  };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold font-mono text-primary border-b border-primary/20 pb-2 flex items-center gap-2">
-        <Settings className="h-6 w-6" />
-        SYSTEM CONFIGURATION
-      </h1>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className={`rounded-none border ${systemOnline ? "border-primary/40 bg-primary/5" : "border-destructive/40 bg-destructive/5"}`}>
-          <CardContent className="p-4 flex items-center gap-4">
-            <Server className={`h-8 w-8 ${systemOnline ? "text-primary" : "text-destructive"}`} />
-            <div className="font-mono">
-              <div className="text-xs text-muted-foreground">SENTINEL API</div>
-              <div className={`font-bold text-lg ${systemOnline ? "text-primary" : "text-destructive"}`}>
-                {isLoading ? "CHECKING..." : systemOnline ? "ONLINE" : "OFFLINE"}
-              </div>
-            </div>
-            {systemOnline ? <CheckCircle className="h-5 w-5 text-primary ml-auto" /> : <XCircle className="h-5 w-5 text-destructive ml-auto" />}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-none border-primary/40 bg-primary/5">
-          <CardContent className="p-4 flex items-center gap-4">
-            <Database className="h-8 w-8 text-primary" />
-            <div className="font-mono">
-              <div className="text-xs text-muted-foreground">DATABASE</div>
-              <div className="font-bold text-lg text-primary">ONLINE</div>
-            </div>
-            <CheckCircle className="h-5 w-5 text-primary ml-auto" />
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-none border-primary/40 bg-primary/5">
-          <CardContent className="p-4 flex items-center gap-4">
-            <Shield className="h-8 w-8 text-primary" />
-            <div className="font-mono">
-              <div className="text-xs text-muted-foreground">ENCRYPTION</div>
-              <div className="font-bold text-lg text-primary">TLS 1.3</div>
-            </div>
-            <CheckCircle className="h-5 w-5 text-primary ml-auto" />
-          </CardContent>
-        </Card>
+    <div className="p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <SettingsIcon className="h-5 w-5 text-slate-400" />
+        <h1 className="text-lg font-bold text-slate-300 tracking-widest">SETTINGS</h1>
       </div>
 
-      <Card className="rounded-none border-primary/20 bg-card/50">
-        <CardHeader>
-          <CardTitle className="text-sm font-mono text-primary flex items-center gap-2">
-            <Radio className="h-4 w-4" />
-            DATA SOURCE CONNECTIVITY
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {DATA_SOURCES.map((ds) => (
-              <div key={ds.name} className="flex items-center justify-between border border-border/40 bg-background/40 px-4 py-3 font-mono text-sm">
-                <div className="flex items-center gap-4">
-                  {ds.status === "offline" ? (
-                    <WifiOff className="h-4 w-4 text-destructive" />
-                  ) : (
-                    <Wifi className={`h-4 w-4 ${ds.status === "connected" ? "text-primary" : "text-yellow-400"}`} />
-                  )}
-                  <div>
-                    <div className="font-bold">{ds.name}</div>
-                    <div className="text-xs text-muted-foreground">{ds.description}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-muted-foreground">{ds.type}</span>
-                  <Badge variant="outline" className={`${STATUS_COLORS[ds.status]} rounded-none font-mono uppercase text-xs`}>
-                    {ds.status}
-                  </Badge>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-3 border border-green-900/30 bg-[#070e1c] p-2">
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`w-full flex items-center gap-2 px-3 py-2 text-[10px] mb-1 ${tab === t.id ? "bg-green-950/40 text-green-400 border-l-2 border-green-400" : "text-slate-500 hover:bg-green-950/10"}`}>
+              <t.icon className="h-3 w-3" /> {t.label}
+            </button>
+          ))}
+        </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card className="rounded-none border-primary/20 bg-card/50">
-          <CardHeader>
-            <CardTitle className="text-sm font-mono text-primary">CLASSIFICATION CONTROLS</CardTitle>
-          </CardHeader>
-          <CardContent className="font-mono text-sm space-y-3">
-            {[
-              { label: "CURRENT CLASSIFICATION", value: "SECRET//NOFORN", color: "text-destructive" },
-              { label: "HANDLING CAVEAT", value: "ORCON/PROPIN", color: "text-orange-400" },
-              { label: "COMPARTMENT", value: "HCS-P / SI-G", color: "text-yellow-400" },
-              { label: "DOWNGRADE DATE", value: "25X1-HUMAN", color: "text-muted-foreground" },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="flex justify-between border-b border-border/30 pb-2">
-                <span className="text-muted-foreground">{label}</span>
-                <span className={`font-bold ${color}`}>{value}</span>
+        <div className="col-span-9 border border-green-900/30 bg-[#070e1c] p-5 min-h-[400px]">
+          {tab === "profile" && (
+            <div className="space-y-4">
+              <div className="text-sm font-bold text-green-400 mb-3">OPERATOR PROFILE</div>
+              <div className="grid grid-cols-2 gap-4 text-[10px]">
+                <Field label="USERNAME" value={user?.username || "-"} />
+                <Field label="DISPLAY NAME" value={user?.displayName || user?.username || "-"} />
+                <Field label="EMAIL" value={user?.email || "-"} />
+                <Field label="ROLE" value={user?.role?.toUpperCase() || "-"} />
+                <Field label="CLEARANCE" value={user?.clearance?.toUpperCase() || "UNCLASSIFIED"} valueClass="text-red-400" />
+                <Field label="STATUS" value="ACTIVE" valueClass="text-green-400" />
               </div>
-            ))}
-          </CardContent>
-        </Card>
+              <div className="pt-4 border-t border-green-900/30">
+                <button onClick={logout} className="bg-red-950/40 border border-red-900/40 text-red-400 text-[10px] px-4 py-2">LOGOUT SESSION</button>
+              </div>
+            </div>
+          )}
 
-        <Card className="rounded-none border-primary/20 bg-card/50">
-          <CardHeader>
-            <CardTitle className="text-sm font-mono text-primary">PLATFORM INFORMATION</CardTitle>
-          </CardHeader>
-          <CardContent className="font-mono text-sm space-y-3">
-            {[
-              { label: "PLATFORM", value: "SENTINEL v4.0" },
-              { label: "BUILD", value: "2026.04.10-SEC" },
-              { label: "ENCRYPTION", value: "AES-256-GCM" },
-              { label: "NODE", value: "ALPHA-STATION-07" },
-              { label: "UPTIME", value: "99.97% (30d)" },
-              { label: "SESSION", value: "OP: ALPHA-7" },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between border-b border-border/30 pb-2">
-                <span className="text-muted-foreground">{label}</span>
-                <span className="text-primary">{value}</span>
+          {tab === "notifications" && (
+            <div className="space-y-4">
+              <div className="text-sm font-bold text-green-400 mb-3">ALERT NOTIFICATIONS</div>
+              <Toggle label="Receive in-app alerts" checked={prefs.notifyAlerts} onChange={v => setPrefs({ ...prefs, notifyAlerts: v })} />
+              <Toggle label="Critical events only" checked={prefs.notifyCritical} onChange={v => setPrefs({ ...prefs, notifyCritical: v })} />
+              <Toggle label="Email notifications" checked={prefs.notifyEmail} onChange={v => setPrefs({ ...prefs, notifyEmail: v })} />
+              <button onClick={save} className="bg-green-950/40 border border-green-900/40 text-green-400 text-[10px] px-4 py-2 flex items-center gap-2"><Save className="h-3 w-3" /> SAVE</button>
+            </div>
+          )}
+
+          {tab === "security" && (
+            <div className="space-y-4">
+              <div className="text-sm font-bold text-green-400 mb-3">SECURITY SETTINGS</div>
+              <div className="text-[10px] text-slate-400 space-y-2">
+                <div>Two-factor authentication: <span className="text-yellow-400">RECOMMENDED</span></div>
+                <div>Session timeout: <span className="text-slate-300">8 hours</span></div>
+                <div>Last login: <span className="text-slate-300">{new Date().toLocaleString()}</span></div>
+                <div>Failed attempts: <span className="text-green-400">0</span></div>
               </div>
-            ))}
-          </CardContent>
-        </Card>
+              <div className="text-[10px] text-slate-600 border border-yellow-900/30 bg-yellow-950/10 p-3 mt-4">
+                Change of clearance level requires authorization from Security Operations Center.
+              </div>
+            </div>
+          )}
+
+          {tab === "data" && (
+            <div className="space-y-4">
+              <div className="text-sm font-bold text-green-400 mb-3">DATA SYNCHRONIZATION</div>
+              <Toggle label="Auto-refresh data feeds" checked={prefs.autoRefresh} onChange={v => setPrefs({ ...prefs, autoRefresh: v })} />
+              <div>
+                <label className="text-[9px] text-slate-500 block mb-1">REFRESH INTERVAL (seconds)</label>
+                <input type="number" value={prefs.refreshInterval} onChange={e => setPrefs({ ...prefs, refreshInterval: +e.target.value })}
+                  className="w-32 bg-[#050c18] border border-green-900/30 text-slate-300 text-[11px] px-2 py-1.5 focus:outline-none" />
+              </div>
+              <button onClick={save} className="bg-green-950/40 border border-green-900/40 text-green-400 text-[10px] px-4 py-2 flex items-center gap-2"><Save className="h-3 w-3" /> SAVE</button>
+            </div>
+          )}
+
+          {tab === "network" && (
+            <div className="space-y-4">
+              <div className="text-sm font-bold text-green-400 mb-3">NETWORK & CONNECTIVITY</div>
+              <div className="grid grid-cols-2 gap-4 text-[10px]">
+                <Field label="API ENDPOINT" value="api-server (proxied)" />
+                <Field label="WEBSOCKET" value="ACTIVE" valueClass="text-green-400" />
+                <Field label="LATENCY" value="< 50ms" valueClass="text-green-400" />
+                <Field label="PROTOCOL" value="HTTPS / WSS" />
+              </div>
+              <div className="text-[10px] text-slate-600 mt-4 border border-green-900/30 p-3">
+                All connections are routed through the Replit edge proxy with mTLS authentication. No direct external API access.
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+function Field({ label, value, valueClass = "text-slate-300" }: any) {
+  return (
+    <div>
+      <div className="text-slate-600 mb-1">{label}</div>
+      <div className={`${valueClass} font-mono`}>{value}</div>
+    </div>
+  );
+}
+
+function Toggle({ label, checked, onChange }: any) {
+  return (
+    <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer max-w-md">
+      {label}
+      <button onClick={() => onChange(!checked)} className={`w-9 h-5 border ${checked ? "bg-green-950/40 border-green-900/40" : "bg-[#050c18] border-slate-700"} relative transition`}>
+        <div className={`absolute top-0.5 ${checked ? "right-0.5 bg-green-400" : "left-0.5 bg-slate-600"} w-3.5 h-3.5 transition-all`} />
+      </button>
+    </label>
   );
 }
