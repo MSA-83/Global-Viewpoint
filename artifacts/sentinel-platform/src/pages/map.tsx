@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listAssets, listThreats, listGpsAnomalies, getOsintEarthquakes, getOsintDisasters, getOsintISS, getOsintGdacs } from "@/lib/api";
+import { listAssets, listThreats, listGpsAnomalies, getOsintEarthquakes, getOsintDisasters, getOsintISS, getOsintGdacs, getActiveFires, getWeatherTile, getAisStreamToken } from "@/lib/api";
 import { MapContainer, TileLayer, CircleMarker, Popup, LayersControl, LayerGroup, Circle, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Globe2, Plane, Ship, Satellite, Activity, AlertTriangle, Layers as LayersIcon, Radio, Target, Flame, Waves, Radiation } from "lucide-react";
+import { Globe2, Plane, Ship, Satellite, Activity, AlertTriangle, Layers as LayersIcon, Radio, Target, Flame, Waves, Radiation, Cloud } from "lucide-react";
 
 const DOMAIN_COLOR: Record<string, string> = {
   aviation: "#22d3ee", maritime: "#3b82f6", orbital: "#a855f7",
@@ -51,7 +51,11 @@ export default function MapPage() {
   const [showDisasters, setShowDisasters] = useState(true);
   const [showIss, setShowIss] = useState(true);
   const [showGdacs, setShowGdacs] = useState(false);
+  const [showFires, setShowFires] = useState(true);
+  const [showVessels, setShowVessels] = useState(false);
+  const [weatherOverlay, setWeatherOverlay] = useState<"" | "clouds_new" | "precipitation_new" | "temp_new" | "wind_new">("");
   const [tileStyle, setTileStyle] = useState<"dark" | "satellite" | "tactical">("dark");
+  const [vessels, setVessels] = useState<Map<string, any>>(new Map());
 
   const { data: assets } = useQuery({ queryKey: ["assets"], queryFn: listAssets, refetchInterval: 15000 });
   const { data: threats } = useQuery({ queryKey: ["threats"], queryFn: () => listThreats(), refetchInterval: 30000 });
@@ -73,6 +77,81 @@ export default function MapPage() {
     queryKey: ["osint", "gdacs"], queryFn: getOsintGdacs,
     refetchInterval: 5 * 60_000, enabled: showGdacs, retry: 1,
   });
+  const { data: fires } = useQuery({
+    queryKey: ["intel", "fires"], queryFn: () => getActiveFires("VIIRS_SNPP_NRT", 1, "world"),
+    refetchInterval: 10 * 60_000, enabled: showFires, retry: 1,
+  });
+  const { data: weatherTile } = useQuery({
+    queryKey: ["intel", "weather-tile", weatherOverlay],
+    queryFn: () => getWeatherTile(weatherOverlay || "clouds_new"),
+    enabled: !!weatherOverlay, retry: 1,
+  });
+
+  // AISStream: live vessel positions via WebSocket
+  useEffect(() => {
+    if (!showVessels) { setVessels(new Map()); return; }
+    let ws: WebSocket | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg: any = await getAisStreamToken();
+        if (cancelled) return;
+        ws = new WebSocket(cfg.endpoint);
+        ws.onopen = () => {
+          ws?.send(JSON.stringify({
+            APIKey: cfg.apiKey,
+            BoundingBoxes: [[[-90, -180], [90, 180]]],
+            FilterMessageTypes: ["PositionReport", "ShipStaticData"],
+          }));
+        };
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            const meta = msg.MetaData || {};
+            const mmsi = meta.MMSI;
+            if (!mmsi) return;
+            setVessels((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(String(mmsi)) || {};
+              if (msg.MessageType === "PositionReport") {
+                const p = msg.Message?.PositionReport || {};
+                next.set(String(mmsi), {
+                  ...existing,
+                  mmsi,
+                  lat: p.Latitude,
+                  lon: p.Longitude,
+                  sog: p.Sog, cog: p.Cog, heading: p.TrueHeading,
+                  navStatus: p.NavigationalStatus,
+                  timestamp: meta.time_utc || new Date().toISOString(),
+                  shipName: meta.ShipName || existing.shipName,
+                });
+              } else if (msg.MessageType === "ShipStaticData") {
+                const s = msg.Message?.ShipStaticData || {};
+                next.set(String(mmsi), {
+                  ...existing,
+                  mmsi,
+                  shipName: s.Name?.trim() || existing.shipName,
+                  callSign: s.CallSign?.trim(),
+                  imo: s.ImoNumber,
+                  type: s.Type,
+                  destination: s.Destination?.trim(),
+                  draught: s.MaximumStaticDraught,
+                  dimension: s.Dimension,
+                });
+              }
+              if (next.size > 600) {
+                const oldest = Array.from(next.keys()).slice(0, next.size - 600);
+                oldest.forEach(k => next.delete(k));
+              }
+              return next;
+            });
+          } catch {}
+        };
+        ws.onerror = (e) => console.warn("AISStream error", e);
+      } catch (e) { console.warn("AISStream init failed", e); }
+    })();
+    return () => { cancelled = true; ws?.close(); };
+  }, [showVessels]);
 
   const filteredAssets = useMemo(() => (assets ?? []).filter((a: any) =>
     a.lat != null && a.lng != null && (domainFilter === "all" || a.domain === domainFilter)
@@ -150,6 +229,23 @@ export default function MapPage() {
         </div>
 
         <div className="flex items-center gap-1 border border-green-900/30 bg-[#070e1c] px-2 py-1">
+          <Cloud className="h-3 w-3 text-cyan-600" />
+          <span className="text-[9px] text-slate-500 mr-1">WX:</span>
+          {[
+            { k: "", label: "OFF" },
+            { k: "clouds_new", label: "CLOUD" },
+            { k: "precipitation_new", label: "PRECIP" },
+            { k: "temp_new", label: "TEMP" },
+            { k: "wind_new", label: "WIND" },
+          ].map(w => (
+            <button key={w.k || "off"} onClick={() => setWeatherOverlay(w.k as any)}
+              className={`text-[9px] px-2 py-0.5 ${weatherOverlay === w.k ? "bg-cyan-950/60 text-cyan-400" : "text-slate-500 hover:text-slate-300"}`}>
+              {w.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-1 border border-green-900/30 bg-[#070e1c] px-2 py-1">
           <span className="text-[9px] text-slate-500 mr-1">DOMAIN:</span>
           <select value={domainFilter} onChange={e => setDomainFilter(e.target.value)}
             className="bg-transparent text-[10px] text-slate-300 focus:outline-none">
@@ -164,6 +260,8 @@ export default function MapPage() {
             { k: "assets", label: "ASSETS", val: showAssets, set: setShowAssets, c: "#22c55e" },
             { k: "threats", label: "THREATS", val: showThreats, set: setShowThreats, c: "#f97316" },
             { k: "gps", label: "GPS ANOM", val: showGps, set: setShowGps, c: "#eab308" },
+            { k: "fires", label: "NASA FIRMS", val: showFires, set: setShowFires, c: "#dc2626" },
+            { k: "vessels", label: "AIS LIVE", val: showVessels, set: setShowVessels, c: "#3b82f6" },
             { k: "quakes", label: "USGS QUAKES", val: showQuakes, set: setShowQuakes, c: "#fb923c" },
             { k: "disasters", label: "NASA EONET", val: showDisasters, set: setShowDisasters, c: "#dc2626" },
             { k: "iss", label: "ISS LIVE", val: showIss, set: setShowIss, c: "#a855f7" },
@@ -193,6 +291,92 @@ export default function MapPage() {
           <MapResizer />
           <TileLayer url={tileConfig.url} attribution={tileConfig.attribution}
             subdomains={tileConfig.subdomains as any} />
+
+          {/* OpenWeatherMap overlay */}
+          {weatherOverlay && weatherTile?.template && (
+            <TileLayer url={weatherTile.template} opacity={0.55} attribution="&copy; OpenWeatherMap" zIndex={350} />
+          )}
+
+          {/* NASA FIRMS active fires (heat-colored by FRP) */}
+          {showFires && (fires?.events ?? []).map((f: any) => {
+            const frp = f.frp ?? 0;
+            const color = frp > 100 ? "#dc2626" : frp > 30 ? "#f97316" : frp > 10 ? "#fb923c" : "#fbbf24";
+            const radius = Math.min(6, 2 + Math.log10(Math.max(frp, 1)));
+            return (
+              <CircleMarker key={`fire-${f.id}`} center={[f.latitude, f.longitude]} radius={radius}
+                pathOptions={{ color, weight: 0.5, fillColor: color, fillOpacity: 0.6 }}>
+                <Popup className="sentinel-popup" maxWidth={300}>
+                  <div className="text-slate-200 font-mono">
+                    <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                      style={{ borderColor: color + "60" }}>
+                      <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                        ACTIVE FIRE
+                      </span>
+                      <span className="text-slate-500">NASA FIRMS · {f.satellite}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <div><span className="text-slate-500">FRP</span><br/><span className="text-orange-400">{frp?.toFixed(1) ?? "-"} MW</span></div>
+                      <div><span className="text-slate-500">CONFIDENCE</span><br/><span className="text-slate-300">{f.confidence}</span></div>
+                      <div><span className="text-slate-500">DAY/NIGHT</span><br/><span className="text-slate-300">{f.daynight === "D" ? "DAY" : "NIGHT"}</span></div>
+                      <div><span className="text-slate-500">SAT</span><br/><span className="text-slate-300">{f.satellite}</span></div>
+                      <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{f.latitude?.toFixed(4)}</span></div>
+                      <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{f.longitude?.toFixed(4)}</span></div>
+                    </div>
+                    <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                      DETECTED {f.date} @ {f.time}Z
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {/* Live AIS vessels via AISStream */}
+          {showVessels && Array.from(vessels.values()).filter(v => v.lat != null && v.lon != null).map((v: any) => {
+            const SHIP_TYPE: Record<number, string> = {
+              30: "Fishing", 31: "Tug", 32: "Tug", 33: "Dredger", 34: "Dive ops",
+              35: "Military", 36: "Sailing", 37: "Pleasure",
+              52: "Tug", 60: "Passenger", 70: "Cargo", 80: "Tanker", 90: "Other",
+            };
+            const cat = Math.floor((v.type ?? 0) / 10) * 10;
+            const color = v.type === 35 ? "#ef4444"  // military = red
+              : cat === 70 ? "#3b82f6"               // cargo = blue
+              : cat === 80 ? "#a855f7"               // tanker = purple
+              : cat === 60 ? "#10b981"               // passenger = green
+              : cat === 30 ? "#fbbf24"               // fishing = yellow
+              : "#94a3b8";                            // default = gray
+            return (
+              <CircleMarker key={`v-${v.mmsi}`} center={[v.lat, v.lon]} radius={3}
+                pathOptions={{ color, weight: 0.8, fillColor: color, fillOpacity: 0.65 }}>
+                <Popup className="sentinel-popup" maxWidth={300}>
+                  <div className="text-slate-200 font-mono">
+                    <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                      style={{ borderColor: color + "60" }}>
+                      <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                        {SHIP_TYPE[v.type] || SHIP_TYPE[cat] || "VESSEL"}
+                      </span>
+                      <span className="text-slate-500">MMSI {v.mmsi}</span>
+                    </div>
+                    <div className="text-[12px] font-bold mb-1.5">{v.shipName?.trim() || `MMSI ${v.mmsi}`}</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      {v.callSign && <div><span className="text-slate-500">CALL</span><br/><span className="text-slate-300">{v.callSign}</span></div>}
+                      {v.imo != null && <div><span className="text-slate-500">IMO</span><br/><span className="text-slate-300">{v.imo}</span></div>}
+                      {v.sog != null && <div><span className="text-slate-500">SOG</span><br/><span className="text-cyan-400">{v.sog?.toFixed(1)} kt</span></div>}
+                      {v.cog != null && <div><span className="text-slate-500">COG</span><br/><span className="text-slate-300">{v.cog?.toFixed(0)}°</span></div>}
+                      {v.heading != null && v.heading < 511 && <div><span className="text-slate-500">HDG</span><br/><span className="text-slate-300">{v.heading?.toFixed(0)}°</span></div>}
+                      {v.draught != null && <div><span className="text-slate-500">DRAUGHT</span><br/><span className="text-slate-300">{v.draught?.toFixed(1)} m</span></div>}
+                      <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{v.lat?.toFixed(4)}</span></div>
+                      <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{v.lon?.toFixed(4)}</span></div>
+                      {v.destination && <div className="col-span-2"><span className="text-slate-500">DEST</span><br/><span className="text-slate-300">{v.destination}</span></div>}
+                    </div>
+                    <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                      AISStream · {v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : ""}
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
 
           {showAssets && filteredAssets.map((a: any) => {
             const color = AFF_COLOR[a.affiliation] || "#94a3b8";

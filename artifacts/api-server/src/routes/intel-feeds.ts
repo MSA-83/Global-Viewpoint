@@ -19,26 +19,40 @@ async function fetchJSON(url: string, opts: RequestInit = {}) {
   return res.json();
 }
 
-// --- NASA FIRMS: Active fire / VIIRS events ---
+// --- NASA FIRMS: Active fire / VIIRS events (CSV format only on FIRMS area API) ---
 router.get("/intel/firms", async (req, res) => {
   try {
     const source = (req.query.source as string) || "VIIRS_SNPP_NRT";
     const days = req.query.days || 1;
-    const url = `https://firms.modaps.eosdis.nasa.gov/api/area/json/${NASA_KEY}/${source}/-180,-90,180,90/${days}`;
-    const data = await fetchJSON(url);
-    const events = Array.isArray(data) ? data.slice(0, 300).map((f: any) => ({
-      id: `fire-${f.latitude}-${f.longitude}-${f.acq_date}`,
-      latitude: parseFloat(f.latitude),
-      longitude: parseFloat(f.longitude),
-      brightness: f.bright_ti4 || f.brightness,
-      confidence: f.confidence,
-      date: f.acq_date,
-      time: f.acq_time,
-      satellite: f.satellite,
-      frp: f.frp,
-      daynight: f.daynight,
-    })) : [];
-    res.json({ source, count: events.length, events });
+    const area = (req.query.area as string) || "world"; // world | usa | europe | asia
+    const bbox = area === "usa" ? "-130,24,-66,50"
+      : area === "europe" ? "-12,35,40,72"
+      : area === "asia" ? "60,-10,150,55"
+      : "-180,-90,180,90";
+    const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${NASA_KEY}/${source}/${bbox}/${days}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    if (!r.ok) throw new Error(`FIRMS HTTP ${r.status}: ${(await r.text()).slice(0, 100)}`);
+    const csv = await r.text();
+    const lines = csv.trim().split("\n");
+    if (lines.length < 2) return res.json({ source, count: 0, events: [] });
+    const headers = lines[0].split(",");
+    const idx = (h: string) => headers.indexOf(h);
+    const events = lines.slice(1, 800).map((line) => {
+      const c = line.split(",");
+      return {
+        id: `fire-${c[idx("latitude")]}-${c[idx("longitude")]}-${c[idx("acq_date")]}-${c[idx("acq_time")]}`,
+        latitude: parseFloat(c[idx("latitude")]),
+        longitude: parseFloat(c[idx("longitude")]),
+        brightness: parseFloat(c[idx("bright_ti4") >= 0 ? "bright_ti4" : "brightness"]),
+        confidence: c[idx("confidence")],
+        date: c[idx("acq_date")],
+        time: c[idx("acq_time")],
+        satellite: c[idx("satellite")],
+        frp: parseFloat(c[idx("frp")]),
+        daynight: c[idx("daynight")],
+      };
+    }).filter((f) => !isNaN(f.latitude) && !isNaN(f.longitude));
+    res.json({ source, area, count: events.length, events });
   } catch (e: any) {
     logger.error({ err: e.message }, "NASA FIRMS error");
     res.status(502).json({ error: "nasa_firms_unavailable", message: e.message });
@@ -465,6 +479,170 @@ router.get("/intel/osint/gdacs", async (_req, res) => {
     logger.error({ err: e.message }, "GDACS error");
     res.status(502).json({ error: "gdacs_unavailable", message: e.message });
   }
+});
+
+// ===========================================================================
+// AUTHENTICATED INTEL FEEDS — using user-provided API keys
+// ===========================================================================
+
+// --- Live aircraft positions via RapidAPI ADSBExchange (paid key) ---
+router.get("/intel/aircraft/live", async (req, res) => {
+  try {
+    if (!process.env.RAPIDAPI_KEY) return res.status(404).json({ error: "no_rapidapi_key" });
+    const lat = parseFloat((req.query.lat as string) || "40");
+    const lon = parseFloat((req.query.lon as string) || "0");
+    const dist = Math.min(parseInt((req.query.dist as string) || "250"), 250); // nautical miles, max 250
+    const url = `https://adsbexchange-com1.p.rapidapi.com/v2/lat/${lat}/lon/${lon}/dist/${dist}/`;
+    const data = await cached(`adsb:${lat}:${lon}:${dist}`, 15_000, async () => {
+      const r = await fetch(url, {
+        headers: {
+          "X-RapidAPI-Key": process.env.RAPIDAPI_KEY!,
+          "X-RapidAPI-Host": "adsbexchange-com1.p.rapidapi.com",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) throw new Error(`ADSB HTTP ${r.status}: ${(await r.text()).slice(0, 100)}`);
+      return r.json();
+    });
+    const aircraft = (data.ac || []).filter((a: any) => a.lat != null && a.lon != null).map((a: any) => ({
+      icao24: a.hex,
+      callsign: a.flight?.trim(),
+      registration: a.r,
+      type: a.t,
+      category: a.category,
+      lat: a.lat, lon: a.lon,
+      altitudeFt: a.alt_baro === "ground" ? 0 : a.alt_baro,
+      onGround: a.alt_baro === "ground",
+      groundSpeedKt: a.gs,
+      headingDeg: a.track,
+      verticalRateFpm: a.baro_rate,
+      squawk: a.squawk,
+      emergency: a.emergency,
+      operator: a.ownOp,
+      destination: a.destination,
+      origin: a.origin,
+      mil: a.dbFlags === 1,
+    }));
+    res.json({ source: "ADSB Exchange", center: { lat, lon }, distNm: dist, count: aircraft.length, aircraft });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "ADSB error");
+    res.status(502).json({ error: "adsb_unavailable", message: e.message });
+  }
+});
+
+// --- Military aircraft only (uses ADSBExchange military filter) ---
+router.get("/intel/aircraft/military", async (_req, res) => {
+  try {
+    if (!process.env.RAPIDAPI_KEY) return res.status(404).json({ error: "no_rapidapi_key" });
+    const url = `https://adsbexchange-com1.p.rapidapi.com/v2/mil/`;
+    const data = await cached("adsb:mil", 30_000, async () => {
+      const r = await fetch(url, {
+        headers: {
+          "X-RapidAPI-Key": process.env.RAPIDAPI_KEY!,
+          "X-RapidAPI-Host": "adsbexchange-com1.p.rapidapi.com",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) throw new Error(`ADSB HTTP ${r.status}: ${(await r.text()).slice(0, 100)}`);
+      return r.json();
+    });
+    const aircraft = (data.ac || []).filter((a: any) => a.lat != null && a.lon != null).map((a: any) => ({
+      icao24: a.hex, callsign: a.flight?.trim(), registration: a.r, type: a.t,
+      lat: a.lat, lon: a.lon,
+      altitudeFt: a.alt_baro === "ground" ? 0 : a.alt_baro,
+      groundSpeedKt: a.gs, headingDeg: a.track,
+      operator: a.ownOp, mil: true, country: a.country,
+    }));
+    res.json({ source: "ADSB Exchange (Military)", count: aircraft.length, aircraft });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "ADSB mil error");
+    res.status(502).json({ error: "adsb_mil_unavailable", message: e.message });
+  }
+});
+
+// --- Cesium Ion access token (frontend needs to receive it) ---
+router.get("/intel/cesium/token", (_req, res) => {
+  if (!process.env.CESIUM_ION_TOKEN) return res.status(404).json({ error: "no_cesium_token" });
+  res.json({ token: process.env.CESIUM_ION_TOKEN });
+});
+
+// --- OWM tile URL for frontend overlays (returns appid-bearing template) ---
+router.get("/intel/weather/tile", (req, res) => {
+  if (!process.env.OWM_KEY) return res.status(404).json({ error: "no_owm_key" });
+  const layer = (req.query.layer as string) || "clouds_new";
+  const valid = ["clouds_new", "precipitation_new", "pressure_new", "wind_new", "temp_new"];
+  const safe = valid.includes(layer) ? layer : "clouds_new";
+  res.json({
+    layer: safe,
+    template: `https://tile.openweathermap.org/map/${safe}/{z}/{x}/{y}.png?appid=${process.env.OWM_KEY}`,
+  });
+});
+
+// --- Planet API: imagery quick search (Daily product) ---
+router.get("/intel/planet/search", async (req, res) => {
+  try {
+    if (!process.env.PLANET_API_KEY) return res.status(404).json({ error: "no_planet_key" });
+    const lat = parseFloat((req.query.lat as string) || "0");
+    const lon = parseFloat((req.query.lon as string) || "0");
+    const days = parseInt((req.query.days as string) || "7");
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
+    const body = {
+      item_types: ["PSScene"],
+      filter: {
+        type: "AndFilter",
+        config: [
+          {
+            type: "GeometryFilter", field_name: "geometry",
+            config: { type: "Point", coordinates: [lon, lat] },
+          },
+          {
+            type: "DateRangeFilter", field_name: "acquired",
+            config: { gte: since },
+          },
+          {
+            type: "RangeFilter", field_name: "cloud_cover",
+            config: { lte: 0.3 },
+          },
+        ],
+      },
+    };
+    const r = await fetch("https://api.planet.com/data/v1/quick-search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "api-key " + process.env.PLANET_API_KEY,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) throw new Error(`Planet HTTP ${r.status}: ${(await r.text()).slice(0, 100)}`);
+    const data = await r.json();
+    const items = (data.features || []).slice(0, 20).map((f: any) => ({
+      id: f.id,
+      type: f.properties?.item_type,
+      acquired: f.properties?.acquired,
+      cloudCover: f.properties?.cloud_cover,
+      satellite: f.properties?.satellite_id,
+      providerName: f.properties?.provider,
+      pixelResolution: f.properties?.pixel_resolution,
+      geometry: f.geometry,
+    }));
+    res.json({ source: "Planet Labs", count: items.length, items });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "Planet error");
+    res.status(502).json({ error: "planet_unavailable", message: e.message });
+  }
+});
+
+// --- AISStream subscription token (live vessel WS — frontend connects via WSS) ---
+router.get("/intel/maritime/aisstream/token", (_req, res) => {
+  if (!process.env.AISSTREAM_KEY) return res.status(404).json({ error: "no_aisstream_key" });
+  res.json({
+    endpoint: "wss://stream.aisstream.io/v0/stream",
+    apiKey: process.env.AISSTREAM_KEY,
+    instructions:
+      'Send {"APIKey":"<key>","BoundingBoxes":[[[lat1,lon1],[lat2,lon2]]],"FilterMessageTypes":["PositionReport"]} after connect.',
+  });
 });
 
 // --- Aggregate OSINT pulse (all-in-one for the map) ---

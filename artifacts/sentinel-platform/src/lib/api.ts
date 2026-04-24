@@ -113,3 +113,41 @@ export const getOsintDisasters = (days = 10) => apiFetch(`/intel/osint/disasters
 export const getOsintISS = () => apiFetch("/intel/osint/iss");
 export const getOsintGdacs = () => apiFetch("/intel/osint/gdacs");
 export const getOsintPulse = () => apiFetch("/intel/osint/pulse");
+
+// Live aircraft (OpenSky)
+export const getLiveAircraft = (bbox?: { lamin: number; lamax: number; lomin: number; lomax: number }) => {
+  const qs = bbox ? `?lamin=${bbox.lamin}&lamax=${bbox.lamax}&lomin=${bbox.lomin}&lomax=${bbox.lomax}` : "";
+  return apiFetch(`/intel/aircraft/live${qs}`);
+};
+
+// NASA active fires
+export const getActiveFires = (source = "VIIRS_SNPP_NRT", days = 1, area = "world") =>
+  apiFetch(`/intel/firms?source=${source}&days=${days}&area=${area}`);
+
+// OWM tile overlay
+export const getWeatherTile = (layer = "clouds_new") => apiFetch(`/intel/weather/tile?layer=${layer}`);
+export const getWeatherAt = (lat: number, lon: number) => apiFetch(`/intel/weather?lat=${lat}&lon=${lon}`);
+
+// N2YO satellites near a point
+export const getSatellitesAbove = (lat: number, lon: number, alt = 0, radius = 70, category = 0) =>
+  apiFetch(`/intel/satellites?lat=${lat}&lon=${lon}&alt=${alt}&radius=${radius}&category=${category}`);
+
+// Cesium Ion
+export const getCesiumToken = () => apiFetch("/intel/cesium/token");
+
+// Planet imagery
+export const planetSearch = (lat: number, lon: number, days = 7) =>
+  apiFetch(`/intel/planet/search?lat=${lat}&lon=${lon}&days=${days}`);
+
+// AISStream connection info
+export const getAisStreamToken = () => apiFetch("/intel/maritime/aisstream/token");
+
+// Aviation METAR / TAF
+export const getMetar = (station: string) => apiFetch(`/intel/aviation/metar/${station}`);
+export const getTaf = (station: string) => apiFetch(`/intel/aviation/taf/${station}`);
+
+// News / Shodan / Malware
+export const getSecurityNews = (q = "cyber attack OR military OR sanctions") =>
+  apiFetch(`/intel/news?q=${encodeURIComponent(q)}`);
+export const getShodanSummary = (q = "country:US") => apiFetch(`/intel/shodan/summary?q=${encodeURIComponent(q)}`);
+export const getMalwareSamples = () => apiFetch("/intel/malware");
