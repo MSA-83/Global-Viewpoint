@@ -16,13 +16,8 @@ function setStatus(s: WsConnectionStatus) {
 }
 
 function getWsUrl(): string {
-  const base = import.meta.env.BASE_URL || "/";
-  // In Replit, we need to connect to the API server's WebSocket
-  // The API server is on a different port, proxied via the same domain
-  const apiBase = base.replace(/\/$/, "").replace(/\/sentinel-platform\/?$/, "").replace(/\/$/, "");
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host;
-  return `${protocol}//${host}${apiBase.includes("api") ? apiBase : ""}/api-server/ws`;
+  return `${protocol}//${window.location.host}/api/ws`;
 }
 
 function connect() {

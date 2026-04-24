@@ -5,7 +5,7 @@ import { logger } from "./logger";
 const clients = new Set<WebSocket>();
 
 export function initWsGateway(server: Server) {
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({ server, path: "/api/ws" });
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     clients.add(ws);

@@ -1,20 +1,8 @@
 // API client helpers for all endpoints
-const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "");
-// API server is on a different port/path — use proxy
-const API_ROOT = `${BASE}/api-server/api`.replace("//", "/").replace(/\/api-server\/api$/, "") + "/api-server/api";
-
-// More robust approach: compute API base from environment
-function getApiBase(): string {
-  // In Replit, the API server runs on a different port but is proxied
-  // The proxy path is /api-server
-  const base = window.location.origin;
-  const prefix = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-  // Remove any app-specific suffix to get to root
-  const rootPrefix = prefix.replace(/\/sentinel-platform\/?$/, "");
-  return `${base}${rootPrefix}/api-server/api`;
-}
-
-export const API_BASE = getApiBase();
+// The API server is registered with paths = ["/api"] in artifact.toml,
+// so the Replit edge proxy routes any request starting with /api to it.
+// Use a same-origin relative URL to avoid CORS and proxy quirks.
+export const API_BASE = "/api";
 
 export async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("sentinel_token");
