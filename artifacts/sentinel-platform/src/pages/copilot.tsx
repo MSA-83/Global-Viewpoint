@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { generateBriefing, aiQuery } from "@/lib/api";
-import { Bot, Send, FileText, Zap, AlertCircle, Clock, ChevronDown, Loader2 } from "lucide-react";
+import { Bot, Send, FileText, Zap, AlertCircle, Clock, ChevronDown, Loader2, Trash2 } from "lucide-react";
 
 type Message = {
   id: string;
@@ -83,7 +83,15 @@ export default function CopilotPage() {
           <Bot className="h-5 w-5 text-cyan-400" />
           <h1 className="text-lg font-bold text-cyan-400 tracking-widest">AI COPILOT</h1>
           <span className="text-[9px] border border-cyan-900/40 text-cyan-600 px-2 py-0.5">HUMAN REVIEW REQUIRED</span>
+          <span className="text-[9px] text-slate-600">{messages.filter(m => m.role !== "system").length} MSGS</span>
         </div>
+        <button
+          onClick={() => setMessages(messages.slice(0, 1))}
+          className="flex items-center gap-1 text-[9px] border border-red-900/30 text-red-400 px-2 py-1 hover:bg-red-950/20"
+          title="Clear conversation"
+        >
+          <Trash2 className="h-3 w-3" /> CLEAR
+        </button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1 min-h-0">

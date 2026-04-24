@@ -43,7 +43,7 @@ export function initWsGateway(server: Server) {
     }
   }, 30000);
 
-  logger.info("WebSocket gateway initialized at /ws");
+  logger.info("WebSocket gateway initialized at /api/ws");
   return wss;
 }
 

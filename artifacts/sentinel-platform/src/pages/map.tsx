@@ -1,286 +1,318 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useListThreats, useListIncidents, useListAssets } from "@workspace/api-client-react";
-import { useRealtime } from "@/contexts/realtime";
-import { ZoomIn, ZoomOut, Globe, Layers } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { listAssets, listThreats, listGpsAnomalies } from "@/lib/api";
+import { MapContainer, TileLayer, CircleMarker, Popup, LayersControl, LayerGroup, Circle, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { Globe2, Plane, Ship, Satellite, Activity, AlertTriangle, Layers as LayersIcon, Radio, Target } from "lucide-react";
 
-function latLngToXY(lat: number, lng: number, W: number, H: number) {
-  return { x: ((lng + 180) / 360) * W, y: ((90 - lat) / 180) * H };
+const DOMAIN_COLOR: Record<string, string> = {
+  aviation: "#22d3ee", maritime: "#3b82f6", orbital: "#a855f7",
+  seismic: "#f97316", conflict: "#ef4444", weather: "#eab308",
+  cyber: "#10b981", nuclear: "#f43f5e", sigint: "#8b5cf6",
+  infrastructure: "#06b6d4", energy: "#fbbf24", logistics: "#84cc16",
+  border: "#ec4899", telecom: "#14b8a6", public_safety: "#f59e0b",
+};
+const SEV_COLOR: Record<string, string> = {
+  critical: "#ef4444", high: "#f97316", medium: "#eab308", low: "#22c55e", info: "#3b82f6",
+};
+const AFF_COLOR: Record<string, string> = {
+  friendly: "#3b82f6", hostile: "#ef4444", neutral: "#22c55e", unknown: "#94a3b8",
+};
+
+const DOMAIN_ICONS: Record<string, any> = {
+  aviation: Plane, maritime: Ship, orbital: Satellite, sigint: Radio,
+};
+
+function StatPill({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="border bg-[#070e1c] px-2.5 py-1.5" style={{ borderColor: color + "40" }}>
+      <div className="text-[8px] text-slate-500 tracking-wider">{label}</div>
+      <div className="text-base font-mono font-bold" style={{ color }}>{value}</div>
+    </div>
+  );
 }
 
-const DOMAIN_COLORS: Record<string, string> = {
-  aviation: "#06b6d4", maritime: "#3b82f6", orbital: "#8b5cf6", seismic: "#eab308",
-  conflict: "#ef4444", weather: "#64748b", cyber: "#22c55e", nuclear: "#f97316",
-  sigint: "#ec4899", infrastructure: "#a78bfa", energy: "#f59e0b", logistics: "#14b8a6",
-  border: "#84cc16", telecom: "#fb923c", public_safety: "#34d399",
-};
-const ASSET_SHAPES: Record<string, string> = {
-  aircraft: "▲", vessel: "◆", satellite: "✦", ground: "■", submarine: "▼",
-};
-const SEV_COLORS: Record<string, string> = {
-  critical: "#ef4444", high: "#f97316", medium: "#eab308", low: "#22c55e",
-};
-
-type Point = {
-  id: number; type: "threat"|"asset"|"incident";
-  lat: number; lng: number; label: string;
-  severity?: string; domain?: string; affiliation?: string;
-  assetType?: string; heading?: number;
-};
+function MapResizer() {
+  const map = useMap();
+  useEffect(() => {
+    const t = setTimeout(() => map.invalidateSize(), 100);
+    return () => clearTimeout(t);
+  }, [map]);
+  return null;
+}
 
 export default function MapPage() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 800, h: 500 });
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const lastMouse = useRef({ x: 0, y: 0 });
-  const [filters, setFilters] = useState({ threats: true, assets: true, incidents: true });
-  const [selected, setSelected] = useState<Point | null>(null);
-  const [layer, setLayer] = useState<"normal"|"heatmap">("normal");
-  const { tickCount } = useRealtime();
-  const [, setTick] = useState(0);
+  const [domainFilter, setDomainFilter] = useState<string>("all");
+  const [showThreats, setShowThreats] = useState(true);
+  const [showAssets, setShowAssets] = useState(true);
+  const [showGps, setShowGps] = useState(true);
+  const [tileStyle, setTileStyle] = useState<"dark" | "satellite" | "tactical">("dark");
 
-  useEffect(() => {
-    const t = setInterval(() => setTick(c => c + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
+  const { data: assets } = useQuery({ queryKey: ["assets"], queryFn: listAssets, refetchInterval: 15000 });
+  const { data: threats } = useQuery({ queryKey: ["threats"], queryFn: () => listThreats(), refetchInterval: 30000 });
+  const { data: gpsAnomalies } = useQuery({ queryKey: ["gps"], queryFn: listGpsAnomalies, refetchInterval: 30000 });
 
-  useEffect(() => {
-    const obs = new ResizeObserver(entries => {
-      const r = entries[0].contentRect;
-      setSize({ w: r.width, h: r.height });
-    });
-    if (containerRef.current) obs.observe(containerRef.current);
-    return () => obs.disconnect();
-  }, []);
+  const filteredAssets = useMemo(() => (assets ?? []).filter((a: any) =>
+    a.lat != null && a.lng != null && (domainFilter === "all" || a.domain === domainFilter)
+  ), [assets, domainFilter]);
 
-  const { data: threats } = useListThreats({ limit: 200 }, { query: { refetchInterval: 30000 } });
-  const { data: assets } = useListAssets({ limit: 250 }, { query: { refetchInterval: 15000 } });
-  const { data: incidents } = useListIncidents({ limit: 150 }, { query: { refetchInterval: 30000 } });
+  const filteredThreats = useMemo(() => (threats ?? []).filter((t: any) =>
+    t.lat != null && t.lng != null && (domainFilter === "all" || t.category === domainFilter || t.domain === domainFilter)
+  ), [threats, domainFilter]);
 
-  const { W, H } = { W: size.w, H: size.h };
+  const filteredGps = useMemo(() => (gpsAnomalies ?? []).filter((g: any) =>
+    g.lat != null && g.lng != null
+  ), [gpsAnomalies]);
 
-  const allPoints: Point[] = [
-    ...(filters.threats ? (threats ?? []).filter((t: any) => t.latitude && t.longitude).map((t: any) => ({
-      id: t.id, type: "threat" as const, lat: +t.latitude, lng: +t.longitude,
-      label: t.title, severity: t.severity, domain: t.domain,
-    })) : []),
-    ...(filters.assets ? (assets ?? []).filter((a: any) => a.latitude && a.longitude).map((a: any) => ({
-      id: a.id, type: "asset" as const, lat: +a.latitude, lng: +a.longitude,
-      label: a.name, affiliation: a.affiliation, assetType: a.type, heading: a.heading ? +a.heading : undefined, domain: a.domain,
-    })) : []),
-    ...(filters.incidents ? (incidents ?? []).filter((i: any) => i.latitude && i.longitude).map((i: any) => ({
-      id: i.id, type: "incident" as const, lat: +i.latitude, lng: +i.longitude,
-      label: i.title, severity: i.severity, domain: i.domain,
-    })) : []),
-  ];
-
-  function toSvg(lat: number, lng: number) {
-    const { x, y } = latLngToXY(lat, lng, W, H);
-    return { x: x * zoom + pan.x, y: y * zoom + pan.y };
-  }
-
-  const assetColor = (p: Point) => {
-    if (p.affiliation === "hostile") return "#ef4444";
-    if (p.affiliation === "friendly") return "#22c55e";
-    if (p.affiliation === "neutral") return "#eab308";
-    return DOMAIN_COLORS[p.domain ?? ""] || "#94a3b8";
+  const stats = {
+    total: filteredAssets.length,
+    hostile: filteredAssets.filter((a: any) => a.affiliation === "hostile").length,
+    threats: filteredThreats.length,
+    critical: filteredThreats.filter((t: any) => t.severity === "critical").length,
+    gps: filteredGps.length,
   };
 
-  const handleWheel = useCallback((e: WheelEvent) => {
-    e.preventDefault();
-    setZoom(z => Math.max(0.4, Math.min(8, z * (e.deltaY > 0 ? 0.88 : 1.14))));
-  }, []);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
+  const tileConfig = {
+    dark: {
+      url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: "abcd",
+    },
+    satellite: {
+      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      attribution: 'Tiles &copy; Esri',
+      subdomains: "",
+    },
+    tactical: {
+      url: "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: "abcd",
+    },
+  }[tileStyle];
 
   return (
-    <div className="flex flex-col h-full bg-[#060d1a]">
-      {/* Toolbar */}
-      <div className="h-10 bg-[#070e1c] border-b border-green-900/30 flex items-center px-4 gap-3 shrink-0">
-        <Globe className="h-3.5 w-3.5 text-green-400" />
-        <span className="text-[10px] text-green-400 tracking-widest">TACTICAL MAP — REAL-TIME TRACKING</span>
-        <div className="text-[10px] text-slate-600">Tick #{tickCount}</div>
-        <div className="ml-auto flex items-center gap-2">
-          {[["threats","THREATS",(threats ?? []).length],["assets","ASSETS",(assets ?? []).length],["incidents","INC",(incidents ?? []).length]].map(([k, l, c]) => (
-            <button key={k as string} onClick={() => setFilters(f => ({ ...f, [k as string]: !f[k as keyof typeof f] }))} className={`text-[9px] px-2 py-0.5 border transition-colors ${(filters as any)[k as string] ? "border-green-900/50 text-green-400" : "border-slate-800 text-slate-600"}`}>
-              {l} ({c})
-            </button>
-          ))}
-          <button onClick={() => setLayer(l => l === "normal" ? "heatmap" : "normal")} className="text-[9px] border border-green-900/30 text-slate-500 px-2 py-0.5 hover:text-green-400">
-            <Layers className="h-3 w-3 inline mr-1" />{layer.toUpperCase()}
-          </button>
-          <button onClick={() => setZoom(z => Math.min(8, z * 1.4))} className="text-slate-600 hover:text-green-400"><ZoomIn className="h-3.5 w-3.5" /></button>
-          <button onClick={() => setZoom(z => Math.max(0.4, z / 1.4))} className="text-slate-600 hover:text-green-400"><ZoomOut className="h-3.5 w-3.5" /></button>
-          <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} className="text-[9px] border border-slate-800 text-slate-600 px-2 py-0.5 hover:text-slate-400">RESET</button>
+    <div className="p-3 h-full flex flex-col gap-3">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <Globe2 className="h-5 w-5 text-green-400" />
+          <h1 className="text-lg font-bold text-green-400 tracking-widest">TACTICAL MAP</h1>
+          <span className="text-[9px] text-slate-500 border border-green-900/40 px-2 py-0.5 flex items-center gap-1">
+            <Activity className="h-2.5 w-2.5 text-green-400 animate-pulse" /> LIVE FEED
+          </span>
+        </div>
+        <div className="flex gap-2 items-center">
+          <StatPill label="ASSETS" value={stats.total} color="#22c55e" />
+          <StatPill label="HOSTILE" value={stats.hostile} color="#ef4444" />
+          <StatPill label="THREATS" value={stats.threats} color="#f97316" />
+          <StatPill label="CRITICAL" value={stats.critical} color="#ef4444" />
+          <StatPill label="GPS EVT" value={stats.gps} color="#eab308" />
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0">
-        {/* Map */}
-        <div
-          ref={containerRef}
-          className="flex-1 relative overflow-hidden cursor-crosshair select-none"
-          onMouseDown={e => { setIsPanning(true); lastMouse.current = { x: e.clientX, y: e.clientY }; }}
-          onMouseMove={e => {
-            if (!isPanning) return;
-            setPan(p => ({ x: p.x + e.clientX - lastMouse.current.x, y: p.y + e.clientY - lastMouse.current.y }));
-            lastMouse.current = { x: e.clientX, y: e.clientY };
-          }}
-          onMouseUp={() => setIsPanning(false)}
-          onMouseLeave={() => setIsPanning(false)}
-        >
-          <svg className="w-full h-full" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
-            <defs>
-              <pattern id="grid" width={W * zoom / 18} height={H * zoom / 9} patternUnits="userSpaceOnUse" patternTransform={`translate(${pan.x},${pan.y})`}>
-                <path d={`M ${W * zoom / 18} 0 L 0 0 0 ${H * zoom / 9}`} fill="none" stroke="rgba(34,197,94,0.06)" strokeWidth="0.5" />
-              </pattern>
-              <filter id="glow-critical"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-              <filter id="glow-high"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-            </defs>
-
-            <rect width="100%" height="100%" fill="#060d1a" />
-            <rect width="100%" height="100%" fill="url(#grid)" />
-
-            {/* Continent fills */}
-            <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-              {/* North America */}
-              <path d={`M${W*0.14},${H*0.12} ${W*0.28},${H*0.08} ${W*0.32},${H*0.15} ${W*0.3},${H*0.28} ${W*0.22},${H*0.35} ${W*0.17},${H*0.5} ${W*0.12},${H*0.55} ${W*0.1},${H*0.4}Z`} fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.12)" strokeWidth={0.5/zoom} />
-              <path d={`M${W*0.22},${H*0.52} ${W*0.3},${H*0.5} ${W*0.33},${H*0.62} ${W*0.28},${H*0.75} ${W*0.22},${H*0.8} ${W*0.19},${H*0.65}Z`} fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.12)" strokeWidth={0.5/zoom} />
-              <path d={`M${W*0.45},${H*0.12} ${W*0.56},${H*0.1} ${W*0.58},${H*0.22} ${W*0.52},${H*0.3} ${W*0.45},${H*0.27}Z`} fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.12)" strokeWidth={0.5/zoom} />
-              <path d={`M${W*0.47},${H*0.3} ${W*0.58},${H*0.28} ${W*0.6},${H*0.45} ${W*0.55},${H*0.65} ${W*0.5},${H*0.7} ${W*0.46},${H*0.55}Z`} fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.12)" strokeWidth={0.5/zoom} />
-              <path d={`M${W*0.58},${H*0.08} ${W*0.88},${H*0.08} ${W*0.9},${H*0.25} ${W*0.82},${H*0.45} ${W*0.72},${H*0.48} ${W*0.62},${H*0.38} ${W*0.58},${H*0.2}Z`} fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.12)" strokeWidth={0.5/zoom} />
-              <path d={`M${W*0.78},${H*0.56} ${W*0.9},${H*0.54} ${W*0.92},${H*0.68} ${W*0.82},${H*0.72} ${W*0.76},${H*0.65}Z`} fill="rgba(34,197,94,0.06)" stroke="rgba(34,197,94,0.12)" strokeWidth={0.5/zoom} />
-              {/* Greenland */}
-              <path d={`M${W*0.3},${H*0.05} ${W*0.38},${H*0.03} ${W*0.4},${H*0.12} ${W*0.33},${H*0.14}Z`} fill="rgba(34,197,94,0.04)" stroke="rgba(34,197,94,0.08)" strokeWidth={0.5/zoom} />
-            </g>
-
-            {/* Heatmap */}
-            {layer === "heatmap" && allPoints.filter(p => p.type === "threat").map(p => {
-              const { x, y } = toSvg(p.lat, p.lng);
-              const c = SEV_COLORS[p.severity ?? "low"] || "#22c55e";
-              return <circle key={`heat-${p.id}`} cx={x} cy={y} r={30} fill={c} opacity={0.07} />;
-            })}
-
-            {/* Threat & incident points */}
-            {allPoints.filter(p => p.type !== "asset").map(p => {
-              const { x, y } = toSvg(p.lat, p.lng);
-              const c = SEV_COLORS[p.severity ?? "low"] || "#22c55e";
-              const r = p.severity === "critical" ? 5 : p.severity === "high" ? 4 : 3;
-              const isSelected = selected?.id === p.id && selected.type === p.type;
-              return (
-                <g key={`${p.type}-${p.id}`} onClick={e => { e.stopPropagation(); setSelected(s => s?.id === p.id && s.type === p.type ? null : p); }} style={{ cursor: "pointer" }}>
-                  {p.severity === "critical" && <circle cx={x} cy={y} r={r * 3} fill={c} opacity={0.12} filter="url(#glow-critical)" />}
-                  {p.severity === "high" && <circle cx={x} cy={y} r={r * 2} fill={c} opacity={0.1} />}
-                  <circle cx={x} cy={y} r={r} fill={c} opacity={isSelected ? 1 : 0.8} stroke={isSelected ? "#fff" : c} strokeWidth={isSelected ? 1 : 0.3} />
-                  {isSelected && <circle cx={x} cy={y} r={r + 5} fill="none" stroke={c} strokeWidth={0.7} opacity={0.5} />}
-                </g>
-              );
-            })}
-
-            {/* Asset points with heading arrows */}
-            {allPoints.filter(p => p.type === "asset").map(p => {
-              const { x, y } = toSvg(p.lat, p.lng);
-              const c = assetColor(p);
-              const isSelected = selected?.id === p.id && selected.type === "asset";
-              const heading = p.heading ?? 0;
-              const rad = (heading - 90) * Math.PI / 180;
-              const arrowLen = 9;
-              const ax = x + Math.cos(rad) * arrowLen;
-              const ay = y + Math.sin(rad) * arrowLen;
-              return (
-                <g key={`asset-${p.id}`} onClick={e => { e.stopPropagation(); setSelected(s => s?.id === p.id && s.type === "asset" ? null : p); }} style={{ cursor: "pointer" }}>
-                  {/* Heading arrow */}
-                  {p.heading !== undefined && (
-                    <line x1={x} y1={y} x2={ax} y2={ay} stroke={c} strokeWidth={0.8} opacity={0.6} markerEnd={`url(#arr-${p.id})`} />
-                  )}
-                  <text x={x} y={y} textAnchor="middle" dominantBaseline="middle" fill={c} fontSize={isSelected ? 7 : 5.5} opacity={isSelected ? 1 : 0.75} fontFamily="monospace">
-                    {ASSET_SHAPES[p.assetType ?? ""] || "●"}
-                  </text>
-                  {isSelected && <circle cx={x} cy={y} r={7} fill="none" stroke={c} strokeWidth={0.7} opacity={0.5} />}
-                </g>
-              );
-            })}
-
-            {/* Click-to-deselect backdrop */}
-            <rect width="100%" height="100%" fill="transparent" onClick={() => setSelected(null)} style={{ pointerEvents: "all", zIndex: -1 }} />
-          </svg>
-
-          {/* Selected tooltip */}
-          {selected && (
-            <div className="absolute top-4 right-4 bg-[#070e1c]/95 border border-green-900/40 p-3 max-w-xs text-[10px] pointer-events-none">
-              <div className="text-green-400 text-[9px] tracking-wider mb-1 uppercase">{selected.type}</div>
-              <div className="text-white font-bold mb-1.5">{selected.label}</div>
-              <div className="space-y-0.5 text-slate-500">
-                <div>{selected.lat.toFixed(4)}°, {selected.lng.toFixed(4)}°</div>
-                {selected.severity && <div style={{ color: SEV_COLORS[selected.severity] }}>Severity: {selected.severity.toUpperCase()}</div>}
-                {selected.domain && <div className="capitalize">Domain: {selected.domain.replace("_"," ")}</div>}
-                {selected.affiliation && <div className="capitalize">Affiliation: {selected.affiliation}</div>}
-                {selected.heading !== undefined && <div>Heading: {selected.heading}°</div>}
-                {selected.assetType && <div className="capitalize">Type: {selected.assetType}</div>}
-              </div>
-            </div>
-          )}
-
-          {/* Stats overlay */}
-          <div className="absolute top-4 left-4 bg-[#070e1c]/90 border border-green-900/30 p-2 text-[9px] space-y-0.5 pointer-events-none">
-            <div className="text-slate-600">THREATS: <span className="text-red-400">{(threats ?? []).length}</span></div>
-            <div className="text-slate-600">ASSETS: <span className="text-green-400">{(assets ?? []).length}</span></div>
-            <div className="text-slate-600">INCIDENTS: <span className="text-yellow-400">{(incidents ?? []).length}</span></div>
-            <div className="text-slate-600">ZOOM: <span className="text-slate-400">{zoom.toFixed(1)}x</span></div>
-          </div>
-
-          {/* Legend */}
-          <div className="absolute bottom-4 left-4 bg-[#070e1c]/90 border border-green-900/30 p-2 text-[9px] space-y-1 pointer-events-none">
-            <div className="text-slate-600 tracking-wider mb-1">SEVERITY</div>
-            {Object.entries(SEV_COLORS).map(([s, c]) => (
-              <div key={s} className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c }} />
-                <span className="text-slate-600 uppercase">{s}</span>
-              </div>
-            ))}
-            <div className="text-slate-600 tracking-wider mt-2 mb-1">ASSETS</div>
-            {[["friendly","#22c55e"],["hostile","#ef4444"],["neutral","#eab308"]].map(([l,c]) => (
-              <div key={l} className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c }} />
-                <span className="text-slate-600 capitalize">{l}</span>
-              </div>
-            ))}
-          </div>
+      {/* Controls */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 border border-green-900/30 bg-[#070e1c] px-2 py-1">
+          <LayersIcon className="h-3 w-3 text-green-600" />
+          <span className="text-[9px] text-slate-500 mr-1">TILES:</span>
+          {[
+            { k: "dark", label: "DARK" },
+            { k: "tactical", label: "TACTICAL" },
+            { k: "satellite", label: "SATELLITE" },
+          ].map(t => (
+            <button key={t.k} onClick={() => setTileStyle(t.k as any)}
+              className={`text-[9px] px-2 py-0.5 ${tileStyle === t.k ? "bg-green-950/60 text-green-400" : "text-slate-500 hover:text-slate-300"}`}>
+              {t.label}
+            </button>
+          ))}
         </div>
 
-        {/* Side panel */}
-        <div className="w-48 bg-[#070e1c] border-l border-green-900/30 overflow-y-auto shrink-0">
-          <div className="p-2 border-b border-green-900/20 text-[9px] text-slate-600 tracking-wider">DOMAINS</div>
-          <div className="p-2 space-y-1">
-            {Object.entries(DOMAIN_COLORS).map(([d, c]) => {
-              const count = allPoints.filter(p => p.domain === d).length;
-              return (
-                <div key={d} className="flex items-center gap-2 text-[9px]">
-                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c }} />
-                  <span className="text-slate-600 flex-1 capitalize">{d.replace("_"," ")}</span>
-                  <span className="text-slate-700">{count}</span>
-                </div>
-              );
-            })}
+        <div className="flex items-center gap-1 border border-green-900/30 bg-[#070e1c] px-2 py-1">
+          <span className="text-[9px] text-slate-500 mr-1">DOMAIN:</span>
+          <select value={domainFilter} onChange={e => setDomainFilter(e.target.value)}
+            className="bg-transparent text-[10px] text-slate-300 focus:outline-none">
+            <option value="all">ALL</option>
+            {Object.keys(DOMAIN_COLOR).map(d => <option key={d} value={d}>{d.toUpperCase()}</option>)}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-1 border border-green-900/30 bg-[#070e1c] px-2 py-1">
+          <span className="text-[9px] text-slate-500 mr-1">LAYERS:</span>
+          {[
+            { k: "assets", label: "ASSETS", val: showAssets, set: setShowAssets, c: "#22c55e" },
+            { k: "threats", label: "THREATS", val: showThreats, set: setShowThreats, c: "#f97316" },
+            { k: "gps", label: "GPS ANOM", val: showGps, set: setShowGps, c: "#eab308" },
+          ].map(l => (
+            <button key={l.k} onClick={() => l.set(!l.val)}
+              className="text-[9px] px-2 py-0.5 flex items-center gap-1"
+              style={{ color: l.val ? l.c : "#475569" }}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: l.val ? l.c : "#334155" }} />
+              {l.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Map */}
+      <div className="flex-1 border border-green-900/30 bg-[#050a14] relative min-h-[500px]">
+        <MapContainer
+          center={[20, 0]}
+          zoom={2}
+          minZoom={2}
+          maxZoom={12}
+          style={{ height: "100%", width: "100%", background: "#050a14" }}
+          worldCopyJump
+          preferCanvas
+        >
+          <MapResizer />
+          <TileLayer url={tileConfig.url} attribution={tileConfig.attribution}
+            subdomains={tileConfig.subdomains as any} />
+
+          {showAssets && filteredAssets.map((a: any) => {
+            const color = AFF_COLOR[a.affiliation] || "#94a3b8";
+            return (
+              <CircleMarker key={`a-${a.id}`} center={[a.lat, a.lng]}
+                radius={a.affiliation === "hostile" ? 6 : 5}
+                pathOptions={{
+                  color,
+                  weight: 1.5,
+                  fillColor: color,
+                  fillOpacity: 0.55,
+                }}>
+                <Popup className="sentinel-popup" maxWidth={320}>
+                  <div className="text-slate-200 font-mono">
+                    <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b border-green-900/40 flex items-center justify-between">
+                      <span style={{ color }}>{a.affiliation?.toUpperCase()}</span>
+                      <span className="text-slate-500">{(a.domain || "").toUpperCase()}</span>
+                    </div>
+                    <div className="text-[12px] font-bold mb-0.5">{a.name}</div>
+                    {a.designation && <div className="text-[10px] text-slate-400 mb-2">{a.designation}</div>}
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <div><span className="text-slate-500">TYPE</span><br/><span className="text-slate-300">{a.type || "-"}</span></div>
+                      <div><span className="text-slate-500">FLAG</span><br/><span className="text-slate-300">{a.flag || a.country || "-"}</span></div>
+                      <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{a.lat?.toFixed(4)}</span></div>
+                      <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{a.lng?.toFixed(4)}</span></div>
+                      {a.altitude != null && <div><span className="text-slate-500">ALT</span><br/><span className="text-slate-300">{Math.round(a.altitude)}ft</span></div>}
+                      {a.speed != null && <div><span className="text-slate-500">SPD</span><br/><span className="text-slate-300">{Math.round(a.speed)}kt</span></div>}
+                      {a.heading != null && <div><span className="text-slate-500">HDG</span><br/><span className="text-slate-300">{Math.round(a.heading)}°</span></div>}
+                      <div><span className="text-slate-500">STATUS</span><br/><span className="text-green-400">{(a.status || "ACTIVE").toUpperCase()}</span></div>
+                    </div>
+                    {a.metadata && Object.keys(a.metadata).length > 0 && (
+                      <div className="mt-2 pt-1.5 border-t border-green-900/40">
+                        <div className="text-[9px] text-slate-500 mb-1">METADATA</div>
+                        <div className="text-[9px] text-slate-400 max-h-20 overflow-y-auto">
+                          {Object.entries(a.metadata).slice(0, 6).map(([k, v]) => (
+                            <div key={k}><span className="text-slate-500">{k}:</span> {String(v).slice(0, 40)}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {showThreats && filteredThreats.map((t: any) => {
+            const color = SEV_COLOR[t.severity] || "#94a3b8";
+            const radius = t.severity === "critical" ? 11 : t.severity === "high" ? 9 : 7;
+            return (
+              <LayerGroup key={`t-${t.id}`}>
+                <Circle center={[t.lat, t.lng]} radius={50000 + (t.severity === "critical" ? 200000 : 0)}
+                  pathOptions={{ color, weight: 0.8, fillColor: color, fillOpacity: 0.08 }} />
+                <CircleMarker center={[t.lat, t.lng]} radius={radius}
+                  pathOptions={{
+                    color,
+                    weight: 2,
+                    fillColor: color,
+                    fillOpacity: 0.7,
+                    className: t.severity === "critical" ? "sentinel-pulse" : undefined,
+                  }}>
+                  <Popup className="sentinel-popup" maxWidth={340}>
+                    <div className="text-slate-200 font-mono">
+                      <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                        style={{ borderColor: color + "60" }}>
+                        <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                          {t.severity?.toUpperCase()} THREAT
+                        </span>
+                        <span className="text-slate-500">{(t.category || t.domain || "").toUpperCase()}</span>
+                      </div>
+                      <div className="text-[12px] font-bold mb-1.5">{t.title}</div>
+                      {t.description && (
+                        <div className="text-[10px] text-slate-400 mb-2 max-h-24 overflow-y-auto leading-snug">
+                          {t.description}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                        <div><span className="text-slate-500">REGION</span><br/><span className="text-slate-300">{t.region || "-"}</span></div>
+                        <div><span className="text-slate-500">SOURCE</span><br/><span className="text-slate-300">{t.source || "INTERNAL"}</span></div>
+                        <div><span className="text-slate-500">SCORE</span><br/><span className="text-cyan-400">{t.score ?? t.confidence ?? "-"}</span></div>
+                        <div><span className="text-slate-500">STATUS</span><br/><span className="text-orange-400">{t.status?.toUpperCase()}</span></div>
+                        <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{t.lat?.toFixed(4)}</span></div>
+                        <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{t.lng?.toFixed(4)}</span></div>
+                      </div>
+                      <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                        DETECTED {t.createdAt ? new Date(t.createdAt).toLocaleString() : "-"}
+                      </div>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              </LayerGroup>
+            );
+          })}
+
+          {showGps && filteredGps.map((g: any) => {
+            const color = g.type === "spoofing" ? "#ef4444" : g.type === "jamming" ? "#f97316" : "#eab308";
+            return (
+              <LayerGroup key={`g-${g.id}`}>
+                <Circle center={[g.lat, g.lng]} radius={(g.radius || 50) * 1000}
+                  pathOptions={{ color, weight: 1, fillColor: color, fillOpacity: 0.15, dashArray: "4,4" }}>
+                  <Popup className="sentinel-popup" maxWidth={320}>
+                    <div className="text-slate-200 font-mono">
+                      <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                        style={{ borderColor: color + "60" }}>
+                        <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                          GPS {g.type?.toUpperCase()}
+                        </span>
+                        <span className="text-slate-500">{(g.severity || "").toUpperCase()}</span>
+                      </div>
+                      <div className="text-[12px] font-bold mb-1.5">{g.region || "Unknown Region"}</div>
+                      {g.description && <div className="text-[10px] text-slate-400 mb-2">{g.description}</div>}
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                        <div><span className="text-slate-500">RADIUS</span><br/><span className="text-yellow-400">{g.radius?.toFixed(0)} km</span></div>
+                        <div><span className="text-slate-500">CONFIDENCE</span><br/><span className="text-slate-300">{Math.round((g.confidence ?? 0) * 100)}%</span></div>
+                        <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{g.lat?.toFixed(4)}</span></div>
+                        <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{g.lng?.toFixed(4)}</span></div>
+                        {g.duration && <div><span className="text-slate-500">DURATION</span><br/><span className="text-slate-300">{Math.round(g.duration / 60)} min</span></div>}
+                      </div>
+                    </div>
+                  </Popup>
+                </Circle>
+              </LayerGroup>
+            );
+          })}
+        </MapContainer>
+
+        {/* Legend overlay */}
+        <div className="absolute bottom-3 right-3 z-[1000] border border-green-900/40 bg-[#070e1c]/95 backdrop-blur p-2 text-[9px] space-y-1">
+          <div className="text-slate-500 tracking-wider mb-1 flex items-center gap-1">
+            <Target className="h-2.5 w-2.5" /> LEGEND
           </div>
-          <div className="p-2 border-t border-green-900/20 text-[9px] text-slate-600 tracking-wider">AFFILIATION</div>
-          <div className="p-2 space-y-1">
-            {[["friendly","#22c55e"],["hostile","#ef4444"],["neutral","#eab308"],["unknown","#94a3b8"]].map(([aff,c]) => {
-              const count = (assets ?? []).filter((a: any) => a.affiliation === aff).length;
-              return (
-                <div key={aff} className="flex items-center gap-2 text-[9px]">
-                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c }} />
-                  <span className="text-slate-600 flex-1 capitalize">{aff}</span>
-                  <span className="text-slate-700">{count}</span>
-                </div>
-              );
-            })}
+          {Object.entries(SEV_COLOR).map(([k, c]) => (
+            <div key={k} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full" style={{ background: c }} />
+              <span className="text-slate-400">{k.toUpperCase()}</span>
+            </div>
+          ))}
+          <div className="border-t border-slate-800 pt-1 mt-1">
+            <div className="text-slate-500">AFFILIATION</div>
+            {Object.entries(AFF_COLOR).map(([k, c]) => (
+              <div key={k} className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full border" style={{ borderColor: c }} />
+                <span className="text-slate-400">{k.toUpperCase()}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
