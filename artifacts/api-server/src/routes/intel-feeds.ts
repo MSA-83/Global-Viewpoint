@@ -336,4 +336,154 @@ router.get("/intel/malware", async (req, res) => {
   }
 });
 
+// ===========================================================================
+// FREE OSINT ENDPOINTS — no API keys required, suitable for live map overlays
+// ===========================================================================
+
+const cache = new Map<string, { ts: number; data: any }>();
+async function cached(key: string, ttlMs: number, fn: () => Promise<any>) {
+  const hit = cache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.ts < ttlMs) return hit.data;
+  const data = await fn();
+  cache.set(key, { ts: now, data });
+  return data;
+}
+
+// --- USGS Earthquakes (real-time, global) ---
+router.get("/intel/osint/earthquakes", async (req, res) => {
+  try {
+    const window = (req.query.window as string) || "day"; // hour | day | week
+    const min = (req.query.min as string) || "all"; // all | 1.0 | 2.5 | 4.5 | significant
+    const url = `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/${min}_${window}.geojson`;
+    const data = await cached(`quakes:${window}:${min}`, 60_000, () => fetchJSON(url));
+    const events = (data.features || []).map((f: any) => ({
+      id: f.id,
+      magnitude: f.properties.mag,
+      place: f.properties.place,
+      time: f.properties.time,
+      tsunami: f.properties.tsunami === 1,
+      alert: f.properties.alert,
+      sig: f.properties.sig,
+      type: f.properties.type,
+      url: f.properties.url,
+      depthKm: f.geometry.coordinates[2],
+      lon: f.geometry.coordinates[0],
+      lat: f.geometry.coordinates[1],
+    }));
+    res.json({ source: "USGS", count: events.length, generated: data.metadata?.generated, events });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "USGS error");
+    res.status(502).json({ error: "usgs_unavailable", message: e.message });
+  }
+});
+
+// --- NASA EONET (wildfires, storms, volcanoes, icebergs, floods) ---
+router.get("/intel/osint/disasters", async (req, res) => {
+  try {
+    const days = req.query.days || "10";
+    const url = `https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=${days}`;
+    const data = await cached(`eonet:${days}`, 5 * 60_000, () => fetchJSON(url));
+    const events = (data.events || []).flatMap((ev: any) => {
+      const last = ev.geometry?.[ev.geometry.length - 1];
+      if (!last?.coordinates) return [];
+      const [lon, lat] = Array.isArray(last.coordinates[0]) ? last.coordinates[0] : last.coordinates;
+      const cat = ev.categories?.[0]?.title || "Event";
+      return [{
+        id: ev.id,
+        title: ev.title,
+        category: cat,
+        categoryId: ev.categories?.[0]?.id,
+        sources: (ev.sources || []).map((s: any) => s.id),
+        link: ev.link,
+        date: last.date,
+        magnitude: last.magnitudeValue,
+        magnitudeUnit: last.magnitudeUnit,
+        lat: typeof lat === "number" ? lat : null,
+        lon: typeof lon === "number" ? lon : null,
+      }];
+    }).filter((e: any) => e.lat !== null && e.lon !== null);
+    res.json({ source: "NASA EONET", count: events.length, events });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "EONET error");
+    res.status(502).json({ error: "eonet_unavailable", message: e.message });
+  }
+});
+
+// --- International Space Station live position (no key) ---
+router.get("/intel/osint/iss", async (_req, res) => {
+  try {
+    const data = await fetchJSON("https://api.wheretheiss.at/v1/satellites/25544");
+    res.json({
+      source: "wheretheiss.at",
+      id: "ISS-25544",
+      name: "International Space Station",
+      lat: data.latitude,
+      lon: data.longitude,
+      altitudeKm: data.altitude,
+      velocityKmh: data.velocity,
+      visibility: data.visibility,
+      footprintKm: data.footprint,
+      solarLat: data.solar_lat,
+      solarLon: data.solar_lon,
+      timestamp: data.timestamp,
+    });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "ISS error");
+    res.status(502).json({ error: "iss_unavailable", message: e.message });
+  }
+});
+
+// --- GDACS active disaster alerts (RSS feed parsed) ---
+router.get("/intel/osint/gdacs", async (_req, res) => {
+  try {
+    const url = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/MAP?fromDate=&toDate=&alertlevel=Green;Orange;Red&eventlist=EQ;TC;FL;VO;DR;WF";
+    const data = await cached("gdacs", 5 * 60_000, () => fetchJSON(url));
+    const events = (data.features || []).map((f: any) => {
+      const p = f.properties || {};
+      const c = f.geometry?.coordinates || [];
+      return {
+        id: p.eventid,
+        eventType: p.eventtype,
+        eventName: p.eventname,
+        alertLevel: p.alertlevel,
+        alertScore: p.alertscore,
+        country: p.country,
+        episodeId: p.episodeid,
+        from: p.fromdate,
+        to: p.todate,
+        url: p.url?.report,
+        severity: p.severitydata?.severity,
+        severityText: p.severitydata?.severitytext,
+        population: p.population?.population,
+        lat: c[1],
+        lon: c[0],
+      };
+    }).filter((e: any) => typeof e.lat === "number" && typeof e.lon === "number");
+    res.json({ source: "GDACS", count: events.length, events });
+  } catch (e: any) {
+    logger.error({ err: e.message }, "GDACS error");
+    res.status(502).json({ error: "gdacs_unavailable", message: e.message });
+  }
+});
+
+// --- Aggregate OSINT pulse (all-in-one for the map) ---
+router.get("/intel/osint/pulse", async (_req, res) => {
+  const out: any = { generatedAt: new Date().toISOString(), sources: {} };
+  const tasks = [
+    ["earthquakes", "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"],
+    ["disasters", "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=10"],
+    ["iss", "https://api.wheretheiss.at/v1/satellites/25544"],
+    ["gdacs", "https://www.gdacs.org/gdacsapi/api/events/geteventlist/MAP?alertlevel=Green;Orange;Red"],
+  ] as const;
+  await Promise.all(tasks.map(async ([key, url]) => {
+    try {
+      out.sources[key] = { ok: true, data: await cached(`pulse:${key}`, 60_000, () => fetchJSON(url)) };
+    } catch (e: any) {
+      out.sources[key] = { ok: false, error: e.message };
+    }
+  }));
+  res.json(out);
+});
+
 export default router;

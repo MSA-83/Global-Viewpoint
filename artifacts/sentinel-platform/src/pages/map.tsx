@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listAssets, listThreats, listGpsAnomalies } from "@/lib/api";
+import { listAssets, listThreats, listGpsAnomalies, getOsintEarthquakes, getOsintDisasters, getOsintISS, getOsintGdacs } from "@/lib/api";
 import { MapContainer, TileLayer, CircleMarker, Popup, LayersControl, LayerGroup, Circle, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Globe2, Plane, Ship, Satellite, Activity, AlertTriangle, Layers as LayersIcon, Radio, Target } from "lucide-react";
+import { Globe2, Plane, Ship, Satellite, Activity, AlertTriangle, Layers as LayersIcon, Radio, Target, Flame, Waves, Radiation } from "lucide-react";
 
 const DOMAIN_COLOR: Record<string, string> = {
   aviation: "#22d3ee", maritime: "#3b82f6", orbital: "#a855f7",
@@ -47,11 +47,32 @@ export default function MapPage() {
   const [showThreats, setShowThreats] = useState(true);
   const [showAssets, setShowAssets] = useState(true);
   const [showGps, setShowGps] = useState(true);
+  const [showQuakes, setShowQuakes] = useState(true);
+  const [showDisasters, setShowDisasters] = useState(true);
+  const [showIss, setShowIss] = useState(true);
+  const [showGdacs, setShowGdacs] = useState(false);
   const [tileStyle, setTileStyle] = useState<"dark" | "satellite" | "tactical">("dark");
 
   const { data: assets } = useQuery({ queryKey: ["assets"], queryFn: listAssets, refetchInterval: 15000 });
   const { data: threats } = useQuery({ queryKey: ["threats"], queryFn: () => listThreats(), refetchInterval: 30000 });
   const { data: gpsAnomalies } = useQuery({ queryKey: ["gps"], queryFn: listGpsAnomalies, refetchInterval: 30000 });
+
+  const { data: quakes } = useQuery({
+    queryKey: ["osint", "quakes"], queryFn: () => getOsintEarthquakes("day"),
+    refetchInterval: 60_000, enabled: showQuakes, retry: 1,
+  });
+  const { data: disasters } = useQuery({
+    queryKey: ["osint", "disasters"], queryFn: () => getOsintDisasters(10),
+    refetchInterval: 5 * 60_000, enabled: showDisasters, retry: 1,
+  });
+  const { data: iss } = useQuery({
+    queryKey: ["osint", "iss"], queryFn: getOsintISS,
+    refetchInterval: 10_000, enabled: showIss, retry: 1,
+  });
+  const { data: gdacs } = useQuery({
+    queryKey: ["osint", "gdacs"], queryFn: getOsintGdacs,
+    refetchInterval: 5 * 60_000, enabled: showGdacs, retry: 1,
+  });
 
   const filteredAssets = useMemo(() => (assets ?? []).filter((a: any) =>
     a.lat != null && a.lng != null && (domainFilter === "all" || a.domain === domainFilter)
@@ -143,6 +164,10 @@ export default function MapPage() {
             { k: "assets", label: "ASSETS", val: showAssets, set: setShowAssets, c: "#22c55e" },
             { k: "threats", label: "THREATS", val: showThreats, set: setShowThreats, c: "#f97316" },
             { k: "gps", label: "GPS ANOM", val: showGps, set: setShowGps, c: "#eab308" },
+            { k: "quakes", label: "USGS QUAKES", val: showQuakes, set: setShowQuakes, c: "#fb923c" },
+            { k: "disasters", label: "NASA EONET", val: showDisasters, set: setShowDisasters, c: "#dc2626" },
+            { k: "iss", label: "ISS LIVE", val: showIss, set: setShowIss, c: "#a855f7" },
+            { k: "gdacs", label: "GDACS", val: showGdacs, set: setShowGdacs, c: "#f43f5e" },
           ].map(l => (
             <button key={l.k} onClick={() => l.set(!l.val)}
               className="text-[9px] px-2 py-0.5 flex items-center gap-1"
@@ -292,6 +317,151 @@ export default function MapPage() {
               </LayerGroup>
             );
           })}
+          {/* USGS Earthquakes */}
+          {showQuakes && (quakes?.events ?? []).map((q: any) => {
+            const mag = q.magnitude ?? 0;
+            const color = mag >= 6 ? "#dc2626" : mag >= 5 ? "#f97316" : mag >= 3 ? "#fb923c" : "#fbbf24";
+            return (
+              <LayerGroup key={`q-${q.id}`}>
+                <Circle center={[q.lat, q.lon]} radius={Math.max(20000, mag * 35000)}
+                  pathOptions={{ color, weight: 0.8, fillColor: color, fillOpacity: 0.05, dashArray: "2,3" }} />
+                <CircleMarker center={[q.lat, q.lon]} radius={Math.max(3, mag * 1.4)}
+                  pathOptions={{ color, weight: 1.2, fillColor: color, fillOpacity: 0.7 }}>
+                  <Popup className="sentinel-popup" maxWidth={320}>
+                    <div className="text-slate-200 font-mono">
+                      <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                        style={{ borderColor: color + "60" }}>
+                        <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                          M {mag?.toFixed(1)} {q.tsunami ? "⚠ TSUNAMI" : ""}
+                        </span>
+                        <span className="text-slate-500">USGS</span>
+                      </div>
+                      <div className="text-[12px] font-bold mb-1.5">{q.place}</div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                        <div><span className="text-slate-500">DEPTH</span><br/><span className="text-slate-300">{q.depthKm?.toFixed(1)} km</span></div>
+                        <div><span className="text-slate-500">SIG</span><br/><span className="text-slate-300">{q.sig ?? "-"}</span></div>
+                        <div><span className="text-slate-500">TYPE</span><br/><span className="text-slate-300">{q.type}</span></div>
+                        <div><span className="text-slate-500">ALERT</span><br/><span style={{ color: q.alert ? "#ef4444" : "#64748b" }}>{(q.alert || "none").toUpperCase()}</span></div>
+                        <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{q.lat?.toFixed(4)}</span></div>
+                        <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{q.lon?.toFixed(4)}</span></div>
+                      </div>
+                      <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                        {new Date(q.time).toLocaleString()}
+                        {q.url && <a href={q.url} target="_blank" rel="noreferrer" className="block text-cyan-500 mt-0.5">USGS Report ↗</a>}
+                      </div>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              </LayerGroup>
+            );
+          })}
+
+          {/* NASA EONET — wildfires, storms, volcanoes */}
+          {showDisasters && (disasters?.events ?? []).map((d: any) => {
+            const colorMap: Record<string, string> = {
+              "Wildfires": "#dc2626", "Severe Storms": "#a855f7", "Volcanoes": "#f43f5e",
+              "Sea and Lake Ice": "#22d3ee", "Floods": "#3b82f6", "Earthquakes": "#fb923c",
+              "Drought": "#ca8a04", "Dust and Haze": "#a16207", "Snow": "#e2e8f0",
+              "Temperature Extremes": "#eab308", "Manmade": "#94a3b8",
+            };
+            const color = colorMap[d.category] || "#dc2626";
+            return (
+              <CircleMarker key={`d-${d.id}`} center={[d.lat, d.lon]} radius={5}
+                pathOptions={{ color, weight: 1.5, fillColor: color, fillOpacity: 0.6 }}>
+                <Popup className="sentinel-popup" maxWidth={320}>
+                  <div className="text-slate-200 font-mono">
+                    <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                      style={{ borderColor: color + "60" }}>
+                      <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                        {d.category?.toUpperCase()}
+                      </span>
+                      <span className="text-slate-500">NASA EONET</span>
+                    </div>
+                    <div className="text-[12px] font-bold mb-1.5">{d.title}</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <div><span className="text-slate-500">SOURCES</span><br/><span className="text-slate-300">{d.sources?.join(", ") || "-"}</span></div>
+                      {d.magnitude && (
+                        <div><span className="text-slate-500">MAGNITUDE</span><br/><span className="text-slate-300">{d.magnitude} {d.magnitudeUnit}</span></div>
+                      )}
+                      <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{d.lat?.toFixed(4)}</span></div>
+                      <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{d.lon?.toFixed(4)}</span></div>
+                    </div>
+                    <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                      OBSERVED {d.date ? new Date(d.date).toLocaleString() : "-"}
+                      {d.link && <a href={d.link} target="_blank" rel="noreferrer" className="block text-cyan-500 mt-0.5">EONET Detail ↗</a>}
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {/* GDACS active disaster alerts */}
+          {showGdacs && (gdacs?.events ?? []).map((g: any) => {
+            const color = g.alertLevel === "Red" ? "#dc2626" : g.alertLevel === "Orange" ? "#f97316" : "#22c55e";
+            return (
+              <CircleMarker key={`gd-${g.id}-${g.episodeId}`} center={[g.lat, g.lon]} radius={6}
+                pathOptions={{ color, weight: 1.5, fillColor: color, fillOpacity: 0.55 }}>
+                <Popup className="sentinel-popup" maxWidth={320}>
+                  <div className="text-slate-200 font-mono">
+                    <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between"
+                      style={{ borderColor: color + "60" }}>
+                      <span className="px-1.5 py-0.5 border" style={{ color, borderColor: color + "80" }}>
+                        {g.eventType} • {g.alertLevel?.toUpperCase()}
+                      </span>
+                      <span className="text-slate-500">GDACS</span>
+                    </div>
+                    <div className="text-[12px] font-bold mb-1.5">{g.eventName}</div>
+                    {g.severityText && <div className="text-[10px] text-slate-400 mb-2">{g.severityText}</div>}
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <div><span className="text-slate-500">COUNTRY</span><br/><span className="text-slate-300">{g.country || "-"}</span></div>
+                      <div><span className="text-slate-500">SCORE</span><br/><span className="text-orange-400">{g.alertScore?.toFixed(1) ?? "-"}</span></div>
+                      {g.population != null && (
+                        <div><span className="text-slate-500">EXPOSED POP</span><br/><span className="text-slate-300">{g.population?.toLocaleString()}</span></div>
+                      )}
+                      <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{g.lat?.toFixed(4)}</span></div>
+                      <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{g.lon?.toFixed(4)}</span></div>
+                    </div>
+                    <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                      {g.from ? new Date(g.from).toLocaleString() : ""}
+                      {g.url && <a href={g.url} target="_blank" rel="noreferrer" className="block text-cyan-500 mt-0.5">GDACS Report ↗</a>}
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {/* International Space Station */}
+          {showIss && iss?.lat != null && (
+            <LayerGroup>
+              <Circle center={[iss.lat, iss.lon]} radius={(iss.footprintKm || 4500) * 1000 / 2}
+                pathOptions={{ color: "#a855f7", weight: 0.8, fillColor: "#a855f7", fillOpacity: 0.05, dashArray: "3,4" }} />
+              <CircleMarker center={[iss.lat, iss.lon]} radius={8}
+                pathOptions={{ color: "#a855f7", weight: 2, fillColor: "#c084fc", fillOpacity: 0.8, className: "sentinel-pulse" }}>
+                <Popup className="sentinel-popup" maxWidth={320}>
+                  <div className="text-slate-200 font-mono">
+                    <div className="text-[10px] tracking-wider mb-1.5 pb-1.5 border-b flex items-center justify-between border-purple-900/60">
+                      <span className="px-1.5 py-0.5 border border-purple-700 text-purple-400">ORBITAL</span>
+                      <span className="text-slate-500">wheretheiss.at</span>
+                    </div>
+                    <div className="text-[12px] font-bold mb-1.5">{iss.name}</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <div><span className="text-slate-500">ALTITUDE</span><br/><span className="text-purple-400">{iss.altitudeKm?.toFixed(1)} km</span></div>
+                      <div><span className="text-slate-500">VELOCITY</span><br/><span className="text-purple-400">{iss.velocityKmh?.toFixed(0)} km/h</span></div>
+                      <div><span className="text-slate-500">FOOTPRINT</span><br/><span className="text-slate-300">{iss.footprintKm?.toFixed(0)} km</span></div>
+                      <div><span className="text-slate-500">VISIBILITY</span><br/><span className="text-slate-300">{iss.visibility}</span></div>
+                      <div><span className="text-slate-500">LAT</span><br/><span className="text-cyan-400">{iss.lat?.toFixed(4)}</span></div>
+                      <div><span className="text-slate-500">LON</span><br/><span className="text-cyan-400">{iss.lon?.toFixed(4)}</span></div>
+                    </div>
+                    <div className="mt-2 pt-1.5 border-t border-slate-700 text-[9px] text-slate-500">
+                      LIVE • Refreshes every 10s
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            </LayerGroup>
+          )}
         </MapContainer>
 
         {/* Legend overlay */}

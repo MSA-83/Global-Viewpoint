@@ -105,3 +105,11 @@ export const listSignals = () => apiFetch("/signals");
 
 // GPS Anomalies
 export const listGpsAnomalies = () => apiFetch("/gps-anomalies");
+
+// OSINT (free, no API keys)
+export const getOsintEarthquakes = (window: "hour" | "day" | "week" = "day") =>
+  apiFetch(`/intel/osint/earthquakes?window=${window}`);
+export const getOsintDisasters = (days = 10) => apiFetch(`/intel/osint/disasters?days=${days}`);
+export const getOsintISS = () => apiFetch("/intel/osint/iss");
+export const getOsintGdacs = () => apiFetch("/intel/osint/gdacs");
+export const getOsintPulse = () => apiFetch("/intel/osint/pulse");
