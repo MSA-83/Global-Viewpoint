@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { getAnalyticsOverview, getThreatTrend, getDomainStats, getRegionStats, listAlerts } from "@/lib/api";
+import { getAnalyticsOverview, getThreatTrend, getDomainStats, getRegionStats, listAlerts,
+  getOsintEarthquakes, getOsintDisasters, getOsintISS, getActiveFires, getMalwareSamples } from "@/lib/api";
 import { useListThreats, useGetActivityFeed } from "@workspace/api-client-react";
 import { useRealtime } from "@/contexts/realtime";
 import { useAuth } from "@/contexts/auth";
 import {
   AlertTriangle, Shield, Navigation, Radio, Globe,
-  TrendingUp, Activity, ChevronRight, Bell, Briefcase
+  TrendingUp, Activity, ChevronRight, Bell, Briefcase,
+  Flame, Waves, Satellite, Bug, Zap
 } from "lucide-react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Link } from "wouter";
@@ -61,6 +63,20 @@ export default function Dashboard() {
   const { data: threats } = useListThreats({ limit: 8 }, { query: { refetchInterval: 20000 } });
   const { data: activity } = useGetActivityFeed({ limit: 20 }, { query: { refetchInterval: 15000 } });
 
+  // Live OSINT feeds (real external data)
+  const { data: quakes } = useQuery<any>({ queryKey: ["osint","quakes-day"], queryFn: () => getOsintEarthquakes("day"), refetchInterval: 5*60_000, retry: 1 });
+  const { data: disasters } = useQuery<any>({ queryKey: ["osint","disasters-7"], queryFn: () => getOsintDisasters(7), refetchInterval: 10*60_000, retry: 1 });
+  const { data: iss } = useQuery<any>({ queryKey: ["osint","iss-now"], queryFn: getOsintISS, refetchInterval: 15_000, retry: 1 });
+  const { data: fires } = useQuery<any>({ queryKey: ["osint","fires-day"], queryFn: () => getActiveFires("VIIRS_SNPP_NRT", 1, "world"), refetchInterval: 10*60_000, retry: 1 });
+  const { data: malware } = useQuery<any>({ queryKey: ["osint","malware-50"], queryFn: getMalwareSamples, refetchInterval: 5*60_000, retry: 1 });
+
+  const bigQuakes = (quakes?.events ?? []).filter((q: any) => q.magnitude >= 4.5).length;
+  const maxQuake = Math.max(0, ...(quakes?.events ?? []).map((q: any) => q.magnitude ?? 0));
+  const totalDisasters = (disasters?.events ?? []).length;
+  const totalFires = fires?.count ?? 0;
+  const highFRP = (fires?.events ?? []).filter((f: any) => (f.frp ?? 0) > 50).length;
+  const malCount = (malware?.samples ?? []).length;
+
   const counts = overview?.counts ?? {};
   const gti = overview?.globalThreatIndex ?? 0;
 
@@ -91,6 +107,70 @@ export default function Dashboard() {
         <StatCard label="ASSETS" value={counts.assets} sub="all domains" color="green" icon={Navigation} href="/assets" />
         <StatCard label="SIGINT" value={counts.signals} sub="intercepted" color="cyan" icon={Radio} href="/signals" />
         <StatCard label="CASES" value={counts.cases} sub="active" color="blue" icon={Briefcase} href="/cases" />
+      </div>
+
+      {/* Live OSINT feeds row */}
+      <div className="border border-cyan-900/30 bg-gradient-to-r from-[#070e1c] to-[#08151c] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[10px] text-cyan-500 tracking-widest flex items-center gap-1.5">
+            <Zap className="h-3 w-3" /> LIVE OSINT FEEDS · MULTI-DOMAIN INGEST
+          </div>
+          <span className="text-[9px] text-slate-600">REFRESH 5–10 MIN · DIRECT FROM SOURCE</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <Link href="/map" className="border border-red-900/40 bg-red-950/10 p-3 hover:opacity-80 transition-all">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[9px] text-slate-500 tracking-widest">NASA FIRMS</div>
+              <Flame className="h-3.5 w-3.5 text-red-400" />
+            </div>
+            <div className="text-2xl font-bold text-red-400">{totalFires.toLocaleString()}</div>
+            <div className="text-[9px] text-slate-600 mt-0.5">{highFRP} high-intensity (FRP&gt;50)</div>
+          </Link>
+          <Link href="/map" className="border border-orange-900/40 bg-orange-950/10 p-3 hover:opacity-80 transition-all">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[9px] text-slate-500 tracking-widest">USGS QUAKES 24H</div>
+              <Activity className="h-3.5 w-3.5 text-orange-400" />
+            </div>
+            <div className="text-2xl font-bold text-orange-400">{(quakes?.events?.length ?? 0).toLocaleString()}</div>
+            <div className="text-[9px] text-slate-600 mt-0.5">{bigQuakes} ≥M4.5 · max M{maxQuake.toFixed(1)}</div>
+          </Link>
+          <Link href="/map" className="border border-rose-900/40 bg-rose-950/10 p-3 hover:opacity-80 transition-all">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[9px] text-slate-500 tracking-widest">NASA EONET</div>
+              <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+            </div>
+            <div className="text-2xl font-bold text-rose-400">{totalDisasters}</div>
+            <div className="text-[9px] text-slate-600 mt-0.5">active disasters · 7d</div>
+          </Link>
+          <Link href="/map" className="border border-blue-900/40 bg-blue-950/10 p-3 hover:opacity-80 transition-all">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[9px] text-slate-500 tracking-widest">AIS LIVE</div>
+              <Waves className="h-3.5 w-3.5 text-blue-400" />
+            </div>
+            <div className="text-2xl font-bold text-blue-400">STREAM</div>
+            <div className="text-[9px] text-slate-600 mt-0.5">enable on tactical map</div>
+          </Link>
+          <div className="border border-purple-900/40 bg-purple-950/10 p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[9px] text-slate-500 tracking-widest">ISS POSITION</div>
+              <Satellite className="h-3.5 w-3.5 text-purple-400" />
+            </div>
+            <div className="text-lg font-bold text-purple-400 leading-tight">
+              {iss?.lat != null ? `${iss.lat.toFixed(2)}°, ${iss.lon.toFixed(2)}°` : "—"}
+            </div>
+            <div className="text-[9px] text-slate-600 mt-0.5">
+              {iss?.velocityKmh != null ? `${iss.velocityKmh.toFixed(0)} km/h · ${(iss.altitudeKm ?? 0).toFixed(0)} km` : "tracking..."}
+            </div>
+          </div>
+          <Link href="/threats" className="border border-fuchsia-900/40 bg-fuchsia-950/10 p-3 hover:opacity-80 transition-all">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[9px] text-slate-500 tracking-widest">ABUSE.CH IOC</div>
+              <Bug className="h-3.5 w-3.5 text-fuchsia-400" />
+            </div>
+            <div className="text-2xl font-bold text-fuchsia-400">{malCount}</div>
+            <div className="text-[9px] text-slate-600 mt-0.5">recent malware samples</div>
+          </Link>
+        </div>
       </div>
 
       {/* Main row */}
