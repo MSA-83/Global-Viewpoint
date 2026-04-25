@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listThreats, deleteThreat, updateThreat } from "@/lib/api";
-import { AlertTriangle, Search, Filter, Trash2, X } from "lucide-react";
+import { listThreats, deleteThreat, updateThreat, getMalwareSamples, getSecurityNews, getShodanSummary } from "@/lib/api";
+import { AlertTriangle, Search, Filter, Trash2, X, Bug, Newspaper, Server, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 const SEV_COLOR: Record<string, string> = {
@@ -42,6 +42,29 @@ export default function ThreatsPage() {
     !search || t.title?.toLowerCase().includes(search.toLowerCase()) || t.region?.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Live threat intel feeds
+  const { data: malware } = useQuery<any>({
+    queryKey: ["intel", "malware"], queryFn: getMalwareSamples,
+    refetchInterval: 5 * 60_000, retry: 1,
+  });
+  const { data: news } = useQuery<any>({
+    queryKey: ["intel", "news-cyber"],
+    queryFn: () => getSecurityNews("cyber attack OR ransomware OR data breach"),
+    refetchInterval: 10 * 60_000, retry: 0,
+  });
+  const [shodanQ, setShodanQ] = useState("country:US port:22");
+  const [shodanInput, setShodanInput] = useState("country:US port:22");
+  const { data: shodan, isFetching: shodanLoading } = useQuery<any>({
+    queryKey: ["intel", "shodan", shodanQ],
+    queryFn: () => getShodanSummary(shodanQ),
+    enabled: !!shodanQ, retry: 0,
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard?.writeText(text);
+    toast({ title: "COPIED", description: text.slice(0, 32) + (text.length > 32 ? "…" : "") });
+  };
+
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
@@ -50,6 +73,95 @@ export default function ThreatsPage() {
           <h1 className="text-lg font-bold text-orange-400 tracking-widest">THREAT REGISTRY</h1>
         </div>
         <div className="text-[10px] text-slate-500">{filtered.length} ACTIVE RECORDS</div>
+      </div>
+
+      {/* LIVE THREAT INTEL */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        {/* Abuse.ch Malware Samples */}
+        <div className="border border-fuchsia-900/40 bg-[#0a0510] p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] text-fuchsia-400 tracking-widest flex items-center gap-1.5">
+              <Bug className="h-3 w-3" /> ABUSE.CH MALWARE BAZAAR
+            </div>
+            <span className="text-[9px] text-slate-600">{(malware?.samples ?? []).length} SAMPLES</span>
+          </div>
+          <div className="max-h-40 overflow-y-auto space-y-1 text-[10px] font-mono">
+            {(malware?.samples ?? []).slice(0, 12).map((s: any) => (
+              <div key={s.sha256} className="border-l-2 border-fuchsia-900/40 pl-2 py-0.5 group cursor-pointer hover:bg-fuchsia-950/20"
+                onClick={() => copyToClipboard(s.sha256)} title="Click to copy SHA256">
+                <div className="flex items-center gap-1">
+                  <span className="px-1 py-0.5 bg-fuchsia-950/40 text-fuchsia-300 text-[8px]">{(s.type || "UNK").toUpperCase()}</span>
+                  <span className="text-slate-300 truncate flex-1">{s.name}</span>
+                  <Copy className="h-2.5 w-2.5 text-slate-700 group-hover:text-fuchsia-400" />
+                </div>
+                <div className="text-[9px] text-slate-600 truncate">{s.sha256?.slice(0, 24)}… · {s.firstSeen}</div>
+              </div>
+            ))}
+            {!malware?.samples?.length && <div className="text-[10px] text-slate-700 py-3 text-center">FEED UNAVAILABLE</div>}
+          </div>
+        </div>
+
+        {/* Cyber Security News */}
+        <div className="border border-cyan-900/40 bg-[#050d18] p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] text-cyan-400 tracking-widest flex items-center gap-1.5">
+              <Newspaper className="h-3 w-3" /> CYBER OSINT — NEWS
+            </div>
+            <span className="text-[9px] text-slate-600">{(news?.articles ?? []).length} STORIES</span>
+          </div>
+          <div className="max-h-40 overflow-y-auto space-y-1 text-[10px]">
+            {(news?.articles ?? []).slice(0, 8).map((a: any, i: number) => (
+              <a key={i} href={a.url} target="_blank" rel="noreferrer"
+                className="block border-l-2 border-cyan-900/40 pl-2 py-0.5 hover:bg-cyan-950/20">
+                <div className="text-slate-300 truncate">{a.title}</div>
+                <div className="text-[9px] text-slate-600 truncate">{a.source} · {a.publishedAt ? new Date(a.publishedAt).toLocaleString() : ""}</div>
+              </a>
+            ))}
+            {(!news?.articles?.length || news?.error) && (
+              <div className="text-[10px] text-slate-700 py-3 text-center">
+                {news?.error === "news_unavailable" ? "NEWSAPI RATE LIMITED · RETRY 10M" : "NO STORIES"}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Shodan Host Lookup */}
+        <div className="border border-orange-900/40 bg-[#100806] p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] text-orange-400 tracking-widest flex items-center gap-1.5">
+              <Server className="h-3 w-3" /> SHODAN — EXPOSED ASSETS
+            </div>
+          </div>
+          <form onSubmit={(e) => { e.preventDefault(); setShodanQ(shodanInput); }}
+            className="flex gap-1 mb-2">
+            <input value={shodanInput} onChange={e => setShodanInput(e.target.value)}
+              placeholder="port:22 country:US"
+              className="flex-1 bg-[#070e1c] border border-orange-900/30 text-slate-300 text-[10px] px-2 py-1 focus:outline-none focus:border-orange-700 font-mono" />
+            <button type="submit" className="text-[9px] px-2 py-1 bg-orange-950/40 border border-orange-900/40 text-orange-400">QUERY</button>
+          </form>
+          {shodanLoading ? (
+            <div className="text-[10px] text-slate-700 py-3 text-center">SCANNING SHODAN…</div>
+          ) : shodan?.error ? (
+            <div className="text-[10px] text-red-500 py-3 text-center">{shodan.message || shodan.error}</div>
+          ) : (
+            <div className="space-y-2">
+              <div>
+                <div className="text-[9px] text-slate-500">RESULTS · {shodan?.query}</div>
+                <div className="text-3xl font-bold text-orange-400">{(shodan?.total ?? 0).toLocaleString()}</div>
+                <div className="text-[9px] text-slate-600">exposed hosts on the internet</div>
+              </div>
+              <div className="grid grid-cols-2 gap-1 text-[9px]">
+                {[
+                  "port:22 country:CN", "port:445 country:RU",
+                  "product:elasticsearch", "vuln:cve-2021-44228",
+                ].map(q => (
+                  <button key={q} onClick={() => { setShodanInput(q); setShodanQ(q); }}
+                    className="text-left text-slate-500 hover:text-orange-400 truncate font-mono">› {q}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2 items-center">
